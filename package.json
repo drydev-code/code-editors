@@ -1,6 +1,6 @@
 {
   "name": "@drydev-code/code-editors",
-  "version": "0.0.2",
+  "version": "0.0.5",
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -10,7 +10,7 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
-    "./style.css": "./dist/style.css"
+    "./style.css": "./dist/index.css"
   },
   "files": [
     "dist"
@@ -22,15 +22,17 @@
     "preview": "vite preview"
   },
   "peerDependencies": {
-    "react": ">=18.0.0",
-    "react-dom": ">=18.0.0"
+    "react": ">=19.2.0",
+    "react-dom": ">=19.2.0"
   },
   "dependencies": {
-    "@monaco-editor/react": "4.6.0",
+    "@monaco-editor/react": "4.8.0-rc.3",
     "handlebars": "4.7.8",
     "lucide-react": "^0.555.0"
   },
   "devDependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "~5.8.2",

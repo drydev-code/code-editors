@@ -118,8 +118,8 @@ For production use, pin to a specific version:
 ```javascript
 {
     "imports": {
-        "@drydev-code/code-editors": "https://cdn.jsdelivr.net/npm/@drydev-code/code-editors@0.0.2/dist/index.js",
-        "@drydev-code/code-editors/style.css": "https://cdn.jsdelivr.net/npm/@drydev-code/code-editors@0.0.2/dist/index.css"
+        "@drydev-code/code-editors": "https://cdn.jsdelivr.net/npm/@drydev-code/code-editors@0.0.5/dist/index.js",
+        "@drydev-code/code-editors/style.css": "https://cdn.jsdelivr.net/npm/@drydev-code/code-editors@0.0.5/dist/index.css"
     }
 }
 ```
@@ -127,8 +127,8 @@ For production use, pin to a specific version:
 ## Dependencies
 
 The library has these peer dependencies that you need to provide:
-- `react` (>=18.0.0)
-- `react-dom` (>=18.0.0)
+- `react` (>=19.2.0)
+- `react-dom` (>=19.2.0)
 
 Internal dependencies are bundled:
 - `lucide-react` - Icons
