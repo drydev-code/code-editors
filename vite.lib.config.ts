@@ -20,7 +20,7 @@ export default defineConfig({
       formats: ['es']
     },
     rollupOptions: {
-      external: ['react', 'react-dom', '@google/genai'],
+      external: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', '@google/genai'],
       output: {
         globals: {
           'react': 'React',

@@ -20,6 +20,7 @@ This library is built as an ESM module and can be used with import maps via CDN.
         "imports": {
             "react": "https://esm.sh/react@19.2.0",
             "react-dom": "https://esm.sh/react-dom@19.2.0",
+            "react/jsx-runtime": "https://esm.sh/react@19.2.0/jsx-runtime",
             "react-dom/client": "https://esm.sh/react-dom@19.2.0/client",
             "@drydev-code/code-editors": "https://cdn.jsdelivr.net/npm/@drydev-code/code-editors@latest/dist/index.js",
             "@drydev-code/code-editors/style.css": "https://cdn.jsdelivr.net/npm/@drydev-code/code-editors@latest/dist/index.css"
@@ -118,8 +119,11 @@ For production use, pin to a specific version:
 ```javascript
 {
     "imports": {
-        "@drydev-code/code-editors": "https://cdn.jsdelivr.net/npm/@drydev-code/code-editors@0.0.5/dist/index.js",
-        "@drydev-code/code-editors/style.css": "https://cdn.jsdelivr.net/npm/@drydev-code/code-editors@0.0.5/dist/index.css"
+        "react": "https://esm.sh/react@19.2.0",
+        "react-dom": "https://esm.sh/react-dom@19.2.0",
+        "react/jsx-runtime": "https://esm.sh/react@19.2.0/jsx-runtime",
+        "@drydev-code/code-editors": "https://cdn.jsdelivr.net/npm/@drydev-code/code-editors@0.0.6/dist/index.js",
+        "@drydev-code/code-editors/style.css": "https://cdn.jsdelivr.net/npm/@drydev-code/code-editors@0.0.6/dist/index.css"
     }
 }
 ```
