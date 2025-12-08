@@ -28,7 +28,9 @@
   "dependencies": {
     "@monaco-editor/react": "4.8.0-rc.3",
     "handlebars": "4.7.8",
-    "lucide-react": "^0.555.0"
+    "lucide-react": "^0.555.0",
+    "@google/genai": "^1.30.0",
+    "js-yaml": "4.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
