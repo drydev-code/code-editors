@@ -1,4 +1,4 @@
-import { UserFunction, DbConnection, HostImage } from './types';
+import { UserFunction, DbConnection, HostImage, AgentConfig } from './types';
 
 export const DEFAULT_VARIABLES_JSON = `{
   "meta": {
@@ -33,9 +33,7 @@ export const DEFAULT_VARIABLES_JSON = `{
 export const DEFAULT_JSON_CONTENT = `{
   "meta": {
     "requestId": "{{#func:generateReqId()}}",
-    "timestamp": "{{ meta.timestamp }}",
-    "apiVersion": "v2",
-    "isProduction": {{#func:isProduction(meta.environment)}}
+    "timestamp": "{{ meta.timestamp }}"
   },
   "userInfo": {
     "id": "{{ user.id }}",
@@ -79,6 +77,22 @@ export const DEFAULT_JSON_CONTENT = `{
     }
   }
 }`;
+
+export const DEFAULT_YAML_CONTENT = `meta:
+  requestId: "{{#func:generateReqId()}}"
+  timestamp: "{{ meta.timestamp }}"
+  apiVersion: "v2"
+  isProduction: {{#func:isProduction(meta.environment)}}
+
+userInfo:
+  id: "{{ user.id }}"
+  displayName: "{{ user.name }}"
+  email: "{{ user.email }}"
+  roles:
+    {{#each user.roles}}
+    - "{{ uppercase this }}"
+    {{/each}}
+`;
 
 export const DEFAULT_HTML_CONTENT = `<!DOCTYPE html>
 <html>
@@ -170,3 +184,30 @@ export const DEFAULT_HOST_IMAGES: HostImage[] = [
   { id: '7', name: 'Instagram Icon', url: 'https://placehold.co/32x32?text=I' },
   { id: '8', name: 'LinkedIn Icon', url: 'https://placehold.co/32x32?text=L' }
 ];
+
+export const DEFAULT_AGENT_CONFIG: AgentConfig = {
+    id: 'agent_default',
+    name: 'New Agent',
+    description: 'A helpful assistant.',
+    agentType: 'conversational',
+    provider: 'google',
+    modelId: 'gemini-2.5-flash',
+    temperature: 0.7,
+    maxTokens: 1000,
+    topP: 0.95,
+    jsonMode: false,
+    mode: 'STANDARD',
+    systemMessage: 'You are a helpful AI assistant.',
+    userMessageInput: '{{ user.name }} says: Hello!',
+    fewShotExamples: [],
+    outputParser: 'TEXT',
+    structuredOutputMethod: 'EXAMPLE',
+    jsonSchemaDefinition: '{\n  "type": "object",\n  "properties": {\n    "response": { "type": "string" }\n  }\n}',
+    structuredOutputExample: '{\n  "response": "Hello world"\n}',
+    autoRepair: true,
+    connectedTools: [],
+    mcpServers: [],
+    memoryBackend: 'NONE',
+    sessionId: 'session_001',
+    contextWindowLimit: 10
+};

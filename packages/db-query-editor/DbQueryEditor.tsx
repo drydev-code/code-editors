@@ -5,6 +5,7 @@ import { ToolsPanel } from '../shared-ui/ToolsPanel';
 import { ConnectionManagerModal } from './ConnectionManagerModal';
 import { Settings, Database, Play, Loader2, X, RefreshCw, Wand2 } from 'lucide-react';
 import { interpolateString } from '../../lib/utils';
+import { DEFAULT_SQL_DIALECT_DATA } from '../../lib/constants';
 
 interface DbQueryEditorProps {
     content: string;
@@ -38,15 +39,15 @@ interface DbQueryEditorProps {
 }
 
 export const DbQueryEditor: React.FC<DbQueryEditorProps> = ({ 
-    content, 
+    content = '', 
     onChange, 
-    variables, 
-    variablesJson,
+    variables = {}, 
+    variablesJson = '{}',
     onVariablesChange,
     variableError,
-    functions,
+    functions = [],
     onFunctionsChange,
-    connections,
+    connections = [],
     activeConnectionId,
     onActiveConnectionChange,
     onUpdateConnections,
@@ -54,7 +55,7 @@ export const DbQueryEditor: React.FC<DbQueryEditorProps> = ({
     isExecuting,
     executionResult,
     onCancelQuery,
-    sqlLibrary,
+    sqlLibrary = DEFAULT_SQL_DIALECT_DATA,
     onAiAssist
 }) => {
     const [isManagerOpen, setIsManagerOpen] = useState(false);

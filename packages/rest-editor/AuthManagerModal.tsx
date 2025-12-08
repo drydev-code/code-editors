@@ -11,7 +11,7 @@ interface AuthManagerModalProps {
 
 export const AuthManagerModal: React.FC<AuthManagerModalProps> = ({
   isOpen,
-  credentials,
+  credentials = [],
   onClose,
   onUpdateCredentials,
 }) => {

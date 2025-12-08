@@ -15,7 +15,7 @@ export interface CodeEditorRef {
 
 interface CodeEditorProps {
   value: string;
-  language: 'json' | 'html' | 'javascript' | 'sql' | 'xml' | 'handlebars' | 'text';
+  language: 'json' | 'html' | 'javascript' | 'sql' | 'xml' | 'handlebars' | 'text' | 'yaml' | 'markdown';
   onChange: (value: string | undefined) => void;
   readOnly?: boolean;
 }
@@ -68,7 +68,7 @@ const formatHandlebarsJsonLines = (text: string): string => {
     }).join('\n');
 };
 
-export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(({ value, language, onChange, readOnly = false }, ref) => {
+export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(({ value = '', language, onChange, readOnly = false }, ref) => {
   const editorRef = useRef<any>(null);
 
   const performFormat = async () => {
@@ -182,7 +182,7 @@ export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(({ value, l
       <Editor
         height="100%"
         language={language}
-        value={value}
+        value={value || ''}
         onChange={onChange}
         onMount={handleEditorDidMount}
         options={{

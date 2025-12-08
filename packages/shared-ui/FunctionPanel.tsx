@@ -10,7 +10,12 @@ interface FunctionPanelProps {
   onInsert?: (text: string) => void;
 }
 
-export const FunctionPanel: React.FC<FunctionPanelProps> = ({ functions, onUpdateFunctions, activeEditorType, onInsert }) => {
+export const FunctionPanel: React.FC<FunctionPanelProps> = ({ 
+  functions = [], 
+  onUpdateFunctions, 
+  activeEditorType, 
+  onInsert 
+}) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingFunc, setEditingFunc] = useState<UserFunction | undefined>(undefined);
 

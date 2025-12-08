@@ -43,14 +43,17 @@ interface ToolsPanelProps {
 
   // AI Handler
   onAiAssist?: (prompt: string) => Promise<string>;
+
+  // Agent Run Trigger
+  runTrigger?: { message: string, timestamp: number } | null;
 }
 
 export const ToolsPanel: React.FC<ToolsPanelProps> = ({
-  variablesObj,
-  variablesJson,
+  variablesObj = {},
+  variablesJson = '{}',
   onVariablesChange,
   variableError,
-  functions,
+  functions = [],
   onFunctionsChange,
   activeEditorType,
   sqlDialect,
@@ -63,7 +66,8 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({
   missingFunctions = [],
   onInsert,
   onUpdateContent,
-  onAiAssist
+  onAiAssist,
+  runTrigger
 }) => {
   const [activeTab, setActiveTab] = useState<'variables' | 'functions' | 'blocks' | 'images' | 'chat'>('variables');
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -89,6 +93,18 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({
         setIsCollapsed(false);
     }
   }, [missingFunctions.length]);
+
+  // Handle external run trigger for Agent mode
+  useEffect(() => {
+    if (runTrigger && runTrigger.message) {
+        setActiveTab('chat');
+        setIsCollapsed(false);
+        // Only trigger if we aren't already loading
+        if (!isAiLoading) {
+            handleSendMessage(runTrigger.message);
+        }
+    }
+  }, [runTrigger]);
 
   // Resizing State
   const [width, setWidth] = useState(320);
@@ -341,7 +357,7 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({
 
         {/* Collapsed State Quick Actions */}
         {isCollapsed && (
-            <div className="flex flex-col items-center gap-4 mt-4">
+            <div className="flex-col items-center gap-4 mt-4 flex">
                 <button 
                     onClick={() => { setIsCollapsed(false); setActiveTab('variables'); }}
                     className={`p-2 rounded-lg ${activeTab === 'variables' ? 'bg-teal-50 text-teal-600' : 'text-slate-400 hover:text-slate-600'}`}

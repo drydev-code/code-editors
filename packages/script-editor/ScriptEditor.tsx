@@ -26,13 +26,13 @@ interface ScriptEditorProps {
 }
 
 export const ScriptEditor: React.FC<ScriptEditorProps> = ({ 
-    content, 
+    content = '', 
     onChange, 
-    variables, 
-    variablesJson,
+    variables = {}, 
+    variablesJson = '{}',
     onVariablesChange,
     variableError,
-    functions,
+    functions = [],
     onFunctionsChange,
     onUpdateVariables,
     onAiAssist
@@ -45,13 +45,28 @@ export const ScriptEditor: React.FC<ScriptEditorProps> = ({
     // Editor Ref
     const editorRef = useRef<CodeEditorRef>(null);
 
-    // Resize State
+    // Resize & Layout State
     const [sidebarWidth, setSidebarWidth] = useState(400);
+    const [containerWidth, setContainerWidth] = useState(0);
     const [isResizing, setIsResizing] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
     const startResizing = useCallback(() => setIsResizing(true), []);
     const stopResizing = useCallback(() => setIsResizing(false), []);
+
+    // Layout Breakpoint
+    const isStacked = containerWidth < 768;
+
+    useEffect(() => {
+        if (!containerRef.current) return;
+        const observer = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                setContainerWidth(entry.contentRect.width);
+            }
+        });
+        observer.observe(containerRef.current);
+        return () => observer.disconnect();
+    }, []);
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -111,7 +126,7 @@ export const ScriptEditor: React.FC<ScriptEditorProps> = ({
     return (
         <div className="flex h-full w-full">
             <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden" ref={containerRef}>
-                <div className="flex-1 flex flex-col lg:flex-row gap-0 h-full">
+                <div className={`flex-1 flex ${isStacked ? 'flex-col' : 'flex-row'} gap-0 h-full relative`}>
                     {/* Code Editor */}
                     <div className={`flex-1 flex flex-col min-h-0 p-4 min-w-0`}>
                         <div className="mb-2 flex justify-between items-center h-6">
@@ -153,17 +168,24 @@ export const ScriptEditor: React.FC<ScriptEditorProps> = ({
                     {/* Resizable Output Sidebar */}
                     {isSidebarOpen && (
                         <>
-                            {/* Resize Handle */}
-                            <div 
-                                className="w-1 bg-slate-200 hover:bg-teal-400 cursor-col-resize z-10 hover:w-1.5 -ml-0.5 transition-all flex items-center justify-center group flex-shrink-0"
-                                onMouseDown={startResizing}
-                            >
-                                <div className="h-8 w-1 bg-slate-400 rounded-full group-hover:bg-white/80 hidden group-hover:block" />
-                            </div>
+                            {/* Resize Handle - Only when not stacked */}
+                            {!isStacked && (
+                                <div 
+                                    className="w-1 bg-slate-200 hover:bg-teal-400 cursor-col-resize z-10 hover:w-1.5 -ml-0.5 transition-all flex items-center justify-center group flex-shrink-0"
+                                    onMouseDown={startResizing}
+                                >
+                                    <div className="h-8 w-1 bg-slate-400 rounded-full group-hover:bg-white/80 hidden group-hover:block" />
+                                </div>
+                            )}
 
                             <div 
                                 className="flex flex-col min-h-0 bg-slate-50/50 p-4 gap-4 flex-shrink-0"
-                                style={{ width: sidebarWidth }}
+                                style={{ 
+                                    width: isStacked ? '100%' : sidebarWidth,
+                                    height: isStacked ? '50%' : '100%',
+                                    borderTop: isStacked ? '1px solid #e2e8f0' : 'none',
+                                    borderLeft: isStacked ? 'none' : undefined
+                                }}
                             >
                                 {/* Logs Console */}
                                 <div className={`bg-slate-900 border border-slate-800 rounded-xl flex flex-col shadow-lg overflow-hidden transition-all duration-300 ${isConsoleOpen ? 'flex-1 min-h-[150px]' : 'flex-none h-10'}`}>

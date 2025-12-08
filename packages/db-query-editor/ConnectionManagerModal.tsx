@@ -11,7 +11,7 @@ interface ConnectionManagerModalProps {
 
 export const ConnectionManagerModal: React.FC<ConnectionManagerModalProps> = ({
   isOpen,
-  connections,
+  connections = [],
   onClose,
   onUpdateConnections,
 }) => {

@@ -4,9 +4,9 @@ import {
   ChevronRight, ChevronDown, MoreVertical, 
   Settings, Wifi, Shield, Database, 
   FileCode, Send, RefreshCw, X, Search, Globe, Box,
-  PanelLeftClose, PanelLeftOpen, Loader2
+  PanelLeftClose, PanelLeftOpen, Loader2, Trash2, Key
 } from 'lucide-react';
-import { RestRequest, RestResponse, RestMethod, ApiSource, UserFunction, EditorType, NamedAuthConfig } from '../../lib/types';
+import { RestRequest, RestResponse, RestMethod, ApiSource, UserFunction, EditorType, NamedAuthConfig, RestParam } from '../../lib/types';
 import { CodeEditor, CodeEditorRef } from '../shared-ui/CodeEditor';
 import { KeyValueEditor } from '../shared-ui/KeyValueEditor';
 import { ToolsPanel } from '../shared-ui/ToolsPanel';
@@ -48,7 +48,6 @@ const DEFAULT_REQUEST: RestRequest = {
 
 const resolveRef = (ref: string, root: any): any => {
     if (!ref || typeof ref !== 'string') return null;
-    // Remove leading #/ and split
     const path = ref.replace(/^#\//, '').split('/');
     let current = root;
     for (const segment of path) {
@@ -59,7 +58,7 @@ const resolveRef = (ref: string, root: any): any => {
 };
 
 const generateMockData = (schema: any, rootSpec: any, depth = 0): any => {
-    if (depth > 5) return null; // Prevent infinite recursion
+    if (depth > 5) return null;
     if (!schema) return null;
 
     if (schema.$ref) {
@@ -67,7 +66,6 @@ const generateMockData = (schema: any, rootSpec: any, depth = 0): any => {
         return generateMockData(resolved, rootSpec, depth + 1);
     }
 
-    // Handle allOf (merge properties)
     if (schema.allOf) {
         let obj = {};
         for (const sub of schema.allOf) {
@@ -94,7 +92,6 @@ const generateMockData = (schema: any, rootSpec: any, depth = 0): any => {
 
     if (schema.type === 'array') {
         if (schema.items) {
-            // Generate one item for the array
             return [generateMockData(schema.items, rootSpec, depth + 1)];
         }
         return [];
@@ -115,27 +112,6 @@ const generateMockData = (schema: any, rootSpec: any, depth = 0): any => {
 };
 
 // --- Helper Functions ---
-const parseOpenApiPaths = (spec: any) => {
-  const endpoints: any[] = [];
-  if (!spec || !spec.paths) return endpoints;
-  
-  Object.keys(spec.paths).forEach(path => {
-    Object.keys(spec.paths[path]).forEach(method => {
-      if (['get', 'post', 'put', 'delete', 'patch'].includes(method.toLowerCase())) {
-        endpoints.push({
-          path,
-          method: method.toUpperCase(),
-          summary: spec.paths[path][method].summary || path,
-          operationId: spec.paths[path][method].operationId,
-          tags: spec.paths[path][method].tags || [],
-          spec: spec.paths[path][method]
-        });
-      }
-    });
-  });
-  return endpoints;
-};
-
 const normalizeUrl = (url: string) => {
     if (!url) return '';
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
@@ -146,46 +122,114 @@ const normalizeUrl = (url: string) => {
 
 const updateSourceFromSpec = (source: ApiSource, spec: any): ApiSource => {
     let newBaseUrl = source.baseUrl;
+    let origin = '';
+    try {
+        if (source.specUrl) {
+            origin = new URL(source.specUrl).origin;
+        }
+    } catch {}
     
-    // Swagger 2.0
     if (spec.swagger === '2.0') {
         const protocol = (spec.schemes && spec.schemes.includes('https')) ? 'https' : 'http';
-        const host = spec.host || source.baseUrl.replace(/^https?:\/\//, '');
         const basePath = spec.basePath || '';
-        // If host is present in spec, construct full url. Otherwise append basePath to existing baseUrl (if not already there)
         if (spec.host) {
-            newBaseUrl = `${protocol}://${host}${basePath}`;
+            newBaseUrl = `${protocol}://${spec.host}${basePath}`;
         } else {
-             // Basic append if we just have basePath
-             newBaseUrl = `${source.baseUrl}${basePath}`;
+             if (!newBaseUrl && origin) {
+                 newBaseUrl = `${origin}${basePath}`;
+             }
+             else if (newBaseUrl && basePath && !newBaseUrl.endsWith(basePath)) {
+                 newBaseUrl = `${newBaseUrl.replace(/\/$/, '')}${basePath}`;
+             }
         }
     } 
-    // OpenAPI 3.0
     else if (spec.servers && spec.servers.length > 0) {
-        newBaseUrl = spec.servers[0].url;
-        // Handle relative server URLs
-        if (newBaseUrl.startsWith('/')) {
-             const origin = new URL(source.specUrl || source.baseUrl).origin;
-             newBaseUrl = `${origin}${newBaseUrl}`;
+        const server = spec.servers[0];
+        let serverUrl = server.url;
+        if (serverUrl.startsWith('/')) {
+             if (newBaseUrl) {
+                 serverUrl = `${newBaseUrl.replace(/\/$/, '')}${serverUrl}`;
+             } else if (origin) {
+                 serverUrl = `${origin}${serverUrl}`;
+             }
+             newBaseUrl = serverUrl;
+        } else {
+             newBaseUrl = serverUrl;
+        }
+    } else {
+        if (!newBaseUrl && origin) {
+            newBaseUrl = origin;
         }
     }
     
-    // Remove trailing slash
-    newBaseUrl = newBaseUrl.replace(/\/$/, '');
+    if (newBaseUrl) {
+        newBaseUrl = newBaseUrl.replace(/\/$/, '');
+    }
     
     return { ...source, baseUrl: newBaseUrl, spec };
 };
 
+const fetchSpecContent = async (url: string): Promise<any> => {
+    const tryFetch = async (u: string) => {
+        const res = await fetch(u);
+        if (!res.ok) throw new Error(`Status ${res.status}`);
+        return res.text();
+    };
+
+    let text;
+    try {
+        text = await tryFetch(url);
+    } catch {
+        try {
+            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+            text = await tryFetch(proxyUrl);
+        } catch {
+            const proxyUrl2 = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+            text = await tryFetch(proxyUrl2);
+        }
+    }
+
+    if (!text) throw new Error("All fetch methods failed");
+    return JSON.parse(text);
+};
+
+const parseOpenApiPaths = (spec: any): any[] => {
+    if (!spec || !spec.paths) return [];
+    const endpoints: any[] = [];
+    
+    Object.keys(spec.paths).forEach(path => {
+        const pathItem = spec.paths[path];
+        // parameters defined at path level apply to all operations under this path
+        const pathParameters = pathItem.parameters || [];
+        
+        Object.keys(pathItem).forEach(method => {
+            if (['get', 'post', 'put', 'delete', 'patch', 'options', 'head'].includes(method.toLowerCase())) {
+                const op = pathItem[method];
+                endpoints.push({
+                    method: method.toUpperCase(),
+                    path: path,
+                    summary: op.summary || op.description || `${method.toUpperCase()} ${path}`,
+                    operationId: op.operationId,
+                    spec: op,
+                    pathParameters: pathParameters
+                });
+            }
+        });
+    });
+    
+    return endpoints;
+};
+
 export const RestEditor: React.FC<RestEditorProps> = ({
-  variables,
-  variablesJson,
+  variables = {},
+  variablesJson = '{}',
   onVariablesChange,
   variableError,
-  functions,
+  functions = [],
   onFunctionsChange,
-  authCredentials,
+  authCredentials = [],
   onAuthCredentialsChange,
-  apiSources,
+  apiSources = [],
   onApiSourcesChange,
   onAiAssist
 }) => {
@@ -193,10 +237,8 @@ export const RestEditor: React.FC<RestEditorProps> = ({
   const [isAddingSource, setIsAddingSource] = useState(false);
   const [newSourceData, setNewSourceData] = useState({ name: '', baseUrl: '', specUrl: '' });
   const [expandedSources, setExpandedSources] = useState<Record<string, boolean>>({});
-  const [expandedTags, setExpandedTags] = useState<Record<string, boolean>>({});
 
-  // Use a ref to track attempted fetches to prevent infinite loops if fetch fails
-  const attemptedFetches = useRef<Set<string>>(new Set());
+  const fetchedSources = useRef<Set<string>>(new Set());
 
   // --- Request State ---
   const [requests, setRequests] = useState<RestRequest[]>([DEFAULT_REQUEST]);
@@ -212,26 +254,20 @@ export const RestEditor: React.FC<RestEditorProps> = ({
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isFetchingSpec, setIsFetchingSpec] = useState(false);
 
-  // --- Refs ---
   const bodyEditorRef = useRef<CodeEditorRef>(null);
 
   const activeRequest = requests.find(r => r.id === activeRequestId) || requests[0];
 
   // --- URL to Path Params Sync ---
-  // If the URL contains {var}, ensure it exists in pathParams.
-  // If a param is removed from URL, remove it from pathParams.
-  // Preserve existing values.
   useEffect(() => {
     if (!activeRequest) return;
     
-    // Regex to find {param} in URL
     const matches = activeRequest.url.match(/\{([^}]+)\}/g);
     const keysInUrl = matches ? matches.map(m => m.slice(1, -1)) : [];
 
     const currentParams = activeRequest.pathParams;
     const currentKeys = currentParams.map(p => p.key);
 
-    // Check if sync is needed to avoid infinite loop
     const hasNewKeys = keysInUrl.some(k => !currentKeys.includes(k));
     const hasRemovedKeys = currentKeys.some(k => !keysInUrl.includes(k));
 
@@ -246,113 +282,111 @@ export const RestEditor: React.FC<RestEditorProps> = ({
             };
         });
         
-        // Use functional update to ensure we don't clobber other concurrent updates
         setRequests(prev => prev.map(r => r.id === activeRequestId ? { ...r, pathParams: newPathParams } : r));
     }
 
   }, [activeRequest?.url, activeRequestId]);
 
-  // --- Initial Fetch of Specs for Passed Sources ---
+  // --- Initial Fetch ---
   useEffect(() => {
       let isMounted = true;
-      
-      const fetchSpecForSource = async (source: ApiSource): Promise<ApiSource> => {
-          if (!source.specUrl) return source;
-          
-          try {
-              let response;
-              try {
-                  response = await fetch(source.specUrl);
-                  if (!response.ok) throw new Error("Direct fetch failed");
-              } catch (e) {
-                   // Proxy fallback
-                   const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(source.specUrl)}`;
-                   response = await fetch(proxyUrl);
-              }
-              
-              if (!response.ok) throw new Error("Fetch failed");
-              
-              const text = await response.text();
-              const json = JSON.parse(text);
-              return updateSourceFromSpec(source, json);
-          } catch (e) {
-              console.warn(`Failed to fetch spec for ${source.name}`, e);
-              return source;
-          }
-      };
-
       const updateSpecs = async () => {
           let hasUpdates = false;
-          // Only fetch sources that have a specUrl but no spec loaded, and haven't been attempted this session
           const promises = apiSources.map(async (s) => {
-              if (s.specUrl && !s.spec && !attemptedFetches.current.has(s.id)) {
-                  attemptedFetches.current.add(s.id);
-                  const updated = await fetchSpecForSource(s);
-                  // Check if it actually updated (has spec now)
-                  if (updated.spec) {
-                      hasUpdates = true;
-                      return updated;
+              if (s.specUrl && !s.spec && !fetchedSources.current.has(s.id)) {
+                  try {
+                      const spec = await fetchSpecContent(s.specUrl);
+                      if (spec) {
+                          fetchedSources.current.add(s.id);
+                          hasUpdates = true;
+                          return updateSourceFromSpec(s, spec);
+                      }
+                  } catch (e) {
+                      console.warn(`Failed to auto-fetch spec for ${s.name}`, e);
                   }
               }
               return s;
           });
 
           const updatedList = await Promise.all(promises);
-
           if (isMounted && hasUpdates) {
               onApiSourcesChange(updatedList);
           }
       };
-
       updateSpecs();
-      
       return () => { isMounted = false; };
   }, [apiSources, onApiSourcesChange]);
 
-  // --- Handlers: Registry ---
+  // --- Handlers ---
   const toggleSource = (id: string) => {
       setExpandedSources(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
   const handleAddSource = async () => {
-      if (!newSourceData.name || !newSourceData.baseUrl) return;
+      if (!newSourceData.specUrl && (!newSourceData.name || !newSourceData.baseUrl)) return;
       
       setIsFetchingSpec(true);
       let spec = null;
       let finalSpecUrl = newSourceData.specUrl ? normalizeUrl(newSourceData.specUrl) : '';
-      const finalBaseUrl = normalizeUrl(newSourceData.baseUrl);
+      let finalBaseUrl = newSourceData.baseUrl ? normalizeUrl(newSourceData.baseUrl) : '';
+      let finalName = newSourceData.name;
 
       if (finalSpecUrl) {
           try {
-              // Try direct fetch first
-              const res = await fetch(finalSpecUrl);
-              if (res.ok) {
-                  const text = await res.text();
-                  spec = JSON.parse(text);
-              } else {
-                  throw new Error(`Direct fetch failed: ${res.status}`);
-              }
+              spec = await fetchSpecContent(finalSpecUrl);
           } catch (e) {
-              console.warn("Direct spec fetch failed, attempting proxy...", e);
-              try {
-                  // Fallback to CORS proxy
-                  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(finalSpecUrl)}`;
-                  const res = await fetch(proxyUrl);
-                  if (res.ok) {
-                      const text = await res.text();
-                      spec = JSON.parse(text);
-                  } else {
-                      console.error(`Proxy fetch failed: ${res.status}`);
-                  }
-              } catch (proxyErr) {
-                   console.error("Proxy fetch failed", proxyErr);
-              }
+              console.error("Spec fetch failed during add", e);
           }
+      }
+
+      if (spec) {
+          if (!finalName && spec.info && spec.info.title) finalName = spec.info.title;
+          
+          if (!finalBaseUrl) {
+                if (spec.swagger === '2.0') {
+                    const protocol = (spec.schemes && spec.schemes.includes('https')) ? 'https' : 'http';
+                    const host = spec.host;
+                    const basePath = spec.basePath || '';
+                    if (host) {
+                        finalBaseUrl = `${protocol}://${spec.host}${basePath}`;
+                    } else if (finalSpecUrl) {
+                         try {
+                             const origin = new URL(finalSpecUrl).origin;
+                             finalBaseUrl = `${origin}${basePath}`;
+                         } catch {}
+                    }
+                } 
+                else if (spec.servers && spec.servers.length > 0) {
+                    finalBaseUrl = spec.servers[0].url;
+                    if (finalBaseUrl.startsWith('/') && finalSpecUrl) {
+                        try {
+                             const origin = new URL(finalSpecUrl).origin;
+                             finalBaseUrl = `${origin}${finalBaseUrl}`;
+                        } catch (e) {}
+                    }
+                } 
+                else if (finalSpecUrl) {
+                    try {
+                        finalBaseUrl = new URL(finalSpecUrl).origin;
+                    } catch {}
+                }
+          }
+      }
+
+      if (!finalName) {
+           finalName = 'New API Source';
+           if (finalSpecUrl) {
+               try { finalName = new URL(finalSpecUrl).hostname; } catch {}
+           }
+      }
+
+      if (finalBaseUrl) {
+          finalBaseUrl = finalBaseUrl.replace(/\/$/, '');
       }
 
       let newSource: ApiSource = {
           id: `src_${Date.now()}`,
-          name: newSourceData.name,
+          name: finalName,
           baseUrl: finalBaseUrl,
           specUrl: finalSpecUrl,
           spec,
@@ -361,6 +395,7 @@ export const RestEditor: React.FC<RestEditorProps> = ({
 
       if (spec) {
           newSource = updateSourceFromSpec(newSource, spec);
+          fetchedSources.current.add(newSource.id);
       }
 
       onApiSourcesChange([...apiSources, newSource]);
@@ -371,9 +406,8 @@ export const RestEditor: React.FC<RestEditorProps> = ({
   };
 
   const loadEndpoint = (source: ApiSource, endpoint: any) => {
-      // Clean up path for display
-      const path = endpoint.path;
       const fullSpec = source.spec;
+      const path = endpoint.path;
       
       const newReq: RestRequest = {
           id: `req_${Date.now()}`,
@@ -389,879 +423,639 @@ export const RestEditor: React.FC<RestEditorProps> = ({
           body: ''
       };
 
-      // Extract Params (Query, Header, Path)
-      if (endpoint.spec.parameters) {
-          endpoint.spec.parameters.forEach((p: any) => {
-             const desc = [p.type, p.format, p.description].filter(Boolean).join(' - ');
-             
-             // Handle Query Params
-             if (p.in === 'query') {
-                 let value = '';
-                 if (p.default !== undefined) value = String(p.default);
-                 else if (p.example !== undefined) value = String(p.example);
-                 
-                 newReq.params.push({ 
-                     id: `p_${Date.now()}_${Math.random()}`, 
-                     key: p.name, 
-                     value: value, 
-                     enabled: p.required || false,
-                     description: desc
-                 });
-             } 
-             // Handle Header Params
-             else if (p.in === 'header') {
-                 let value = '';
-                 if (p.default !== undefined) value = String(p.default);
-                 else if (p.example !== undefined) value = String(p.example);
-                 
-                 newReq.headers.push({ 
-                     id: `h_${Date.now()}_${Math.random()}`, 
-                     key: p.name, 
-                     value: value, 
-                     enabled: p.required || false,
-                     description: desc
-                 });
-             }
-             // Handle Path Params
-             else if (p.in === 'path') {
-                 let value = '';
-                 if (p.default !== undefined) value = String(p.default);
-                 else if (p.example !== undefined) value = String(p.example);
-                 
-                 // Note: we just push it here to set the metadata (description/value).
-                 // The useEffect hook will verify it matches the URL structure.
-                 newReq.pathParams.push({
-                     id: `pp_${Date.now()}_${Math.random()}`,
-                     key: p.name,
-                     value: value,
-                     enabled: true,
-                     description: desc
-                 });
-             }
-          });
-      }
+      const rawOperationParams = endpoint.spec.parameters || [];
+      const rawPathParams = endpoint.pathParameters || [];
+      const paramMap = new Map<string, any>();
 
-      // Extract Body Schema (Swagger 2.0 or OpenAPI 3.0)
-      let bodySchema = null;
-      
-      // 1. Check OpenAPI 3 requestBody
-      if (endpoint.spec.requestBody && endpoint.spec.requestBody.content && endpoint.spec.requestBody.content['application/json']) {
-          bodySchema = endpoint.spec.requestBody.content['application/json'].schema;
-      }
-      
-      // 2. Check Swagger 2.0 body parameter
-      if (!bodySchema && endpoint.spec.parameters) {
-          const bodyParam = endpoint.spec.parameters.find((p: any) => p.in === 'body');
-          if (bodyParam) {
-              bodySchema = bodyParam.schema;
+      const addParamToMap = (p: any) => {
+          const resolved = p.$ref ? (resolveRef(p.$ref, fullSpec) || p) : p;
+          if (resolved && resolved.name && resolved.in) {
+              paramMap.set(`${resolved.in}:${resolved.name}`, resolved);
           }
-      }
+      };
 
-      // Generate Mock Body if schema exists
-      if (bodySchema) {
-          const mockData = generateMockData(bodySchema, fullSpec);
-          if (mockData) {
-              newReq.body = JSON.stringify(mockData, null, 2);
-              newReq.bodyType = 'json';
+      rawPathParams.forEach(addParamToMap);
+      rawOperationParams.forEach(addParamToMap);
+
+      paramMap.forEach((p) => {
+          const schema = p.schema || p; 
+          const type = schema.type || 'string';
+          const format = schema.format;
+          
+          const descParts = [];
+          if (type) descParts.push(type);
+          if (format) descParts.push(`(${format})`);
+          if (p.description) descParts.push(p.description);
+          const desc = descParts.join(' - ');
+
+          let value = '';
+          if (schema.default !== undefined) value = String(schema.default);
+          else if (p.default !== undefined) value = String(p.default);
+          else if (schema.example !== undefined) value = String(schema.example);
+          else if (p.example !== undefined) value = String(p.example);
+          
+          const uniqueId = `${p.in}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+          if (p.in === 'query') {
+              newReq.params.push({ 
+                  id: uniqueId, 
+                  key: p.name, 
+                  value: value, 
+                  enabled: !!p.required, 
+                  description: desc
+              });
+          } else if (p.in === 'header') {
+              newReq.headers.push({ 
+                  id: uniqueId, 
+                  key: p.name,
+                  value: value,
+                  enabled: !!p.required,
+                  description: desc
+              });
           }
-      } else if (endpoint.method !== 'GET' && endpoint.method !== 'HEAD') {
-          // Default empty JSON object for methods that usually have a body
-          newReq.body = '{}';
+      });
+      
+      if (['POST', 'PUT', 'PATCH'].includes(endpoint.method)) {
+          const requestBody = endpoint.spec.requestBody;
+          if (requestBody) {
+             const content = requestBody.content;
+             if (content && content['application/json']) {
+                 const schema = content['application/json'].schema;
+                 if (schema) {
+                     const mock = generateMockData(schema, fullSpec);
+                     newReq.body = JSON.stringify(mock, null, 2);
+                 }
+             }
+          }
       }
 
       setRequests(prev => [...prev, newReq]);
       setActiveRequestId(newReq.id);
-      setResponse(null);
-      // Auto-switch to body tab if body is present
-      if (newReq.body && newReq.body !== '{}') {
-          setActiveTab('body');
-      } else {
-          setActiveTab('params');
-      }
+      setActiveTab(endpoint.method === 'GET' ? 'params' : 'body');
   };
 
-  // --- Handlers: Requests ---
-  const updateRequest = (updates: Partial<RestRequest>) => {
-    setRequests(prev => prev.map(r => r.id === activeRequestId ? { ...r, ...updates } : r));
+  const updateRequest = (field: keyof RestRequest, value: any) => {
+    setRequests(prev => prev.map(r => 
+      r.id === activeRequestId ? { ...r, [field]: value } : r
+    ));
   };
 
-  const applyAuthCredential = (id: string) => {
-      if (!id) return;
-      const cred = authCredentials.find(c => c.id === id);
-      if (cred) {
-          // Destructure to remove ID/Name from the actual request config (cleaner)
-          const { id: _, name: __, ...config } = cred;
-          updateRequest({ auth: config });
-      }
-  };
-
-  // --- Execution Engine ---
-  const executeRequest = async () => {
+  const handleRun = async () => {
     setIsLoading(true);
     setResponse(null);
-    const startTime = performance.now();
+    const startTime = Date.now();
 
     try {
-      // 1. Interpolation
-      // Ensure URL has protocol if missing (handle manual entry without http)
-      let urlToProcess = activeRequest.url;
-      if (!urlToProcess.startsWith('http') && !urlToProcess.includes('{{')) {
-          urlToProcess = 'https://' + urlToProcess;
-      }
+        // Interpolate URL and Body
+        const interpolatedUrl = interpolateString(activeRequest.url, variables, functions);
+        const interpolatedBody = activeRequest.body ? interpolateString(activeRequest.body, variables, functions) : undefined;
+        
+        // Build URL with Query Params
+        const urlObj = new URL(interpolatedUrl);
+        activeRequest.params.forEach(p => {
+            if (p.enabled && p.key) {
+                const val = interpolateString(p.value, variables, functions);
+                urlObj.searchParams.append(p.key, val);
+            }
+        });
+        
+        // Fill Path Params
+        let finalUrl = urlObj.toString();
+        activeRequest.pathParams.forEach(p => {
+             if (p.enabled && p.key) {
+                 const val = interpolateString(p.value, variables, functions);
+                 finalUrl = finalUrl.replace(`{${p.key}}`, val);
+             }
+        });
 
-      let urlRaw = interpolateString(urlToProcess, variables, functions);
+        // Headers
+        const headers: Record<string, string> = {};
+        activeRequest.headers.forEach(h => {
+            if (h.enabled && h.key) {
+                headers[h.key] = interpolateString(h.value, variables, functions);
+            }
+        });
 
-      // Path Param Substitution
-      // We substitute {key} with the value from the table
-      activeRequest.pathParams.forEach(p => {
-          if (p.enabled) {
-              const val = interpolateString(p.value, variables, functions);
-              // Replace all occurrences
-              urlRaw = urlRaw.split(`{${p.key}}`).join(encodeURIComponent(val));
-          }
-      });
-
-      const headersObj: Record<string, string> = {};
-      
-      activeRequest.headers.forEach(h => {
-        if (h.enabled && h.key) {
-          headersObj[h.key] = interpolateString(h.value, variables, functions);
-        }
-      });
-
-      // Auth Injection
-      if (activeRequest.auth.type === 'bearer' && activeRequest.auth.token) {
-        headersObj['Authorization'] = `Bearer ${interpolateString(activeRequest.auth.token, variables, functions)}`;
-      } else if (activeRequest.auth.type === 'basic') {
-        const u = interpolateString(activeRequest.auth.username || '', variables, functions);
-        const p = interpolateString(activeRequest.auth.password || '', variables, functions);
-        headersObj['Authorization'] = `Basic ${btoa(`${u}:${p}`)}`;
-      } else if (activeRequest.auth.type === 'apiKey' && activeRequest.auth.apiKeyKey) {
-        const val = interpolateString(activeRequest.auth.apiKeyValue || '', variables, functions);
-        if (activeRequest.auth.apiKeyIn === 'header') {
-          headersObj[activeRequest.auth.apiKeyKey] = val;
-        }
-      }
-
-      // Query Params
-      const urlObj = new URL(urlRaw);
-      activeRequest.params.forEach(p => {
-        if (p.enabled && p.key) {
-          urlObj.searchParams.append(p.key, interpolateString(p.value, variables, functions));
-        }
-      });
-      if (activeRequest.auth.type === 'apiKey' && activeRequest.auth.apiKeyIn === 'query' && activeRequest.auth.apiKeyKey) {
-         urlObj.searchParams.append(activeRequest.auth.apiKeyKey, interpolateString(activeRequest.auth.apiKeyValue || '', variables, functions));
-      }
-
-      // Body
-      let body: string | undefined = undefined;
-      if (['POST', 'PUT', 'PATCH'].includes(activeRequest.method) && activeRequest.bodyType !== 'none') {
-         body = interpolateString(activeRequest.body, variables, functions);
-      }
-
-      // 2. Fetch
-      let res;
-      try {
-          res = await fetch(urlObj.toString(), {
-            method: activeRequest.method,
-            headers: headersObj,
-            body: body
-          });
-      } catch (netErr: any) {
-          throw new Error(`Network Request Failed: ${netErr.message || 'Unknown Error'}. Check CORS or Protocol.`);
-      }
-
-      const endTime = performance.now();
-      
-      let text = '';
-      try {
-          text = await res.text();
-      } catch (readErr: any) {
-          text = `[Error reading response body: ${readErr.message}]`;
-      }
-      
-      // Parse JSON if possible for pretty print
-      let data = text;
-      try {
-        data = JSON.stringify(JSON.parse(text), null, 2);
-      } catch {}
-
-      const resHeaders: Record<string, string> = {};
-      res.headers.forEach((v, k) => resHeaders[k] = v);
-
-      setResponse({
-        status: res.status,
-        statusText: res.statusText,
-        time: Math.round(endTime - startTime),
-        size: new Blob([text]).size,
-        headers: resHeaders,
-        data: data,
-        timestamp: Date.now()
-      });
-
-    } catch (e: any) {
-      setResponse({
-        status: 0,
-        statusText: 'Error',
-        time: 0,
-        size: 0,
-        headers: {},
-        data: e.message || 'Network/Parsing Error',
-        timestamp: Date.now()
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const getStatusColor = (status: number) => {
-    if (status >= 200 && status < 300) return 'text-green-600 bg-green-50 border-green-200';
-    if (status >= 300 && status < 400) return 'text-amber-600 bg-amber-50 border-amber-200';
-    if (status >= 400 && status < 500) return 'text-orange-600 bg-orange-50 border-orange-200';
-    return 'text-red-600 bg-red-50 border-red-200';
-  };
-
-  const MethodBadge = ({ method }: { method: string }) => {
-    const colors: Record<string, string> = {
-      GET: 'text-blue-700 bg-blue-50 border-blue-200',
-      POST: 'text-green-700 bg-green-50 border-green-200',
-      PUT: 'text-orange-700 bg-orange-50 border-orange-200',
-      DELETE: 'text-red-700 bg-red-50 border-red-200',
-      PATCH: 'text-purple-700 bg-purple-50 border-purple-200'
-    };
-    return (
-      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${colors[method] || 'text-slate-600 bg-slate-100 border-slate-200'}`}>
-        {method}
-      </span>
-    );
-  };
-
-  const handleUpdateContent = (text: string) => {
-    const trimmed = text.trim();
-    
-    // Attempt to parse as full request config
-    try {
-        if (trimmed.startsWith('{')) {
-            const json = JSON.parse(trimmed);
-            // Check if it looks like a request config
-            if (json.method && json.url) {
-                const method = json.method.toUpperCase();
-                if (['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'].includes(method)) {
-                    
-                    const updates: Partial<RestRequest> = {
-                        method: method as RestMethod,
-                        url: json.url
-                    };
-
-                    if (json.body) {
-                        updates.body = typeof json.body === 'string' ? json.body : JSON.stringify(json.body, null, 2);
-                        updates.bodyType = 'json';
-                        setActiveTab('body');
-                    }
-                    
-                    if (json.headers && typeof json.headers === 'object') {
-                         updates.headers = Object.entries(json.headers).map(([k, v]) => ({
-                             id: `h_${Date.now()}_${Math.random()}`,
-                             key: k,
-                             value: String(v),
-                             enabled: true
-                         }));
-                    }
-
-                    updateRequest(updates);
-                    return;
-                }
+        // Auth
+        if (activeRequest.auth.type === 'basic') {
+            const user = interpolateString(activeRequest.auth.username || '', variables, functions);
+            const pass = interpolateString(activeRequest.auth.password || '', variables, functions);
+            const b64 = btoa(`${user}:${pass}`);
+            headers['Authorization'] = `Basic ${b64}`;
+        } else if (activeRequest.auth.type === 'bearer') {
+            const token = interpolateString(activeRequest.auth.token || '', variables, functions);
+            headers['Authorization'] = `Bearer ${token}`;
+        } else if (activeRequest.auth.type === 'apiKey') {
+            const key = activeRequest.auth.apiKeyKey || '';
+            const val = interpolateString(activeRequest.auth.apiKeyValue || '', variables, functions);
+            if (activeRequest.auth.apiKeyIn === 'header') {
+                headers[key] = val;
+            } else {
+                if (finalUrl.includes('?')) finalUrl += `&${key}=${val}`;
+                else finalUrl += `?${key}=${val}`;
             }
         }
-    } catch {}
 
-    // Try to detect URL
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('{{')) {
-        updateRequest({ url: trimmed });
-    } 
-    // Try to detect JSON body
-    else if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-        updateRequest({ body: trimmed, bodyType: 'json' });
-        setActiveTab('body');
-    } 
-    // Fallback: assume body text
-    else {
-        updateRequest({ body: trimmed });
-        setActiveTab('body');
+        const res = await fetch(finalUrl, {
+            method: activeRequest.method,
+            headers: headers,
+            body: (activeRequest.method !== 'GET' && activeRequest.method !== 'HEAD') ? interpolatedBody : undefined
+        });
+
+        const text = await res.text();
+        const time = Date.now() - startTime;
+        
+        const resHeaders: Record<string, string> = {};
+        res.headers.forEach((v, k) => resHeaders[k] = v);
+
+        setResponse({
+            status: res.status,
+            statusText: res.statusText,
+            time: time,
+            size: new Blob([text]).size,
+            headers: resHeaders,
+            data: text,
+            timestamp: Date.now()
+        });
+
+    } catch (e: any) {
+        setResponse({
+            status: 0,
+            statusText: 'Network Error',
+            time: Date.now() - startTime,
+            size: 0,
+            headers: {},
+            data: e.message || 'Failed to fetch',
+            timestamp: Date.now()
+        });
+    } finally {
+        setIsLoading(false);
     }
   };
 
-  return (
-    <div className="flex h-full w-full bg-slate-50">
-      
-      {/* --- Sidebar (API Browser) --- */}
-      <div 
-        className="flex flex-col border-r border-slate-200 bg-white h-full shrink-0 relative transition-all duration-300 ease-in-out"
-        style={{ width: isSidebarOpen ? sidebarWidth : '3.5rem' }}
-      >
-        <div className={`py-3 bg-white border-b border-slate-200 text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center ${isSidebarOpen ? 'justify-between px-4' : 'justify-center'}`}>
-            {isSidebarOpen && (
-                <div className="flex items-center gap-2">
-                    <Globe size={14} className="text-teal-600" />
-                    <span>APIs</span>
-                </div>
-            )}
-            <button 
-                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-1 rounded transition-colors"
-                title={isSidebarOpen ? "Collapse Sidebar" : "Expand Sidebar"}
-            >
-                {isSidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-            </button>
-        </div>
+  // --- Render Components ---
 
-        {isSidebarOpen ? (
-        <>
-            {/* Search */}
-            <div className="p-3 border-b border-slate-100">
-                <div className="relative">
-                    <input 
-                        type="text"
-                        value={filterText}
-                        onChange={e => setFilterText(e.target.value)}
-                        placeholder="Filter..."
-                        className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm focus:outline-none focus:border-teal-500"
-                    />
-                    <Search size={14} className="absolute left-2.5 top-2 text-slate-400" />
-                </div>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto custom-scrollbar">
-                <div className="p-2 space-y-2">
-                    {apiSources.length === 0 ? (
-                        <div className="p-4 text-center text-sm text-slate-500 border-2 border-dashed border-slate-200 rounded-lg m-2">
-                            <p className="mb-2 font-bold">No API Sources</p>
-                            <p className="text-xs">Add an API source to browse endpoints or create a custom request.</p>
-                        </div>
-                    ) : (
-                        apiSources.map(source => (
-                            <div key={source.id} className="rounded-lg border border-slate-200 overflow-hidden bg-white">
-                                <div 
-                                    onClick={() => toggleSource(source.id)}
-                                    className="flex items-center justify-between p-3 bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors border-b border-slate-100"
-                                >
-                                    <div className="font-semibold text-sm text-slate-700">{source.name}</div>
-                                    <div className="text-slate-400">
-                                        {expandedSources[source.id] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                                    </div>
-                                </div>
-                                {expandedSources[source.id] && (
-                                    <div className="bg-white p-2">
-                                        {source.spec ? (
-                                            (() => {
-                                                const endpoints = parseOpenApiPaths(source.spec);
-                                                const filtered = endpoints.filter(ep => {
-                                                    const search = filterText.toLowerCase();
-                                                    return (
-                                                        ep.path.toLowerCase().includes(search) || 
-                                                        ep.method.toLowerCase().includes(search) ||
-                                                        (ep.summary && ep.summary.toLowerCase().includes(search)) ||
-                                                        (ep.tags && ep.tags.some((t: any) => t.toLowerCase().includes(search)))
-                                                    );
-                                                });
-
-                                                // Group by tags
-                                                const grouped: Record<string, typeof endpoints> = {};
-                                                filtered.forEach(ep => {
-                                                    const tag = (ep.tags && ep.tags.length > 0) ? ep.tags[0] : 'Endpoints';
-                                                    if (!grouped[tag]) grouped[tag] = [];
-                                                    grouped[tag].push(ep);
-                                                });
-                                                
-                                                const sortedTags = Object.keys(grouped).sort();
-
-                                                if (sortedTags.length === 0) {
-                                                    return <div className="text-xs text-slate-400 italic p-2">No matching endpoints</div>;
-                                                }
-
-                                                return (
-                                                    <div className="space-y-1">
-                                                        {sortedTags.map(tag => {
-                                                            const groupId = `${source.id}-${tag}`;
-                                                            // Auto-expand if filtering, otherwise respect toggle state (default collapsed)
-                                                            const isExpanded = filterText ? true : !!expandedTags[groupId];
-                                                            
-                                                            return (
-                                                                <div key={groupId}>
-                                                                    <div 
-                                                                        className="flex items-center gap-1 py-1 px-1 cursor-pointer hover:bg-slate-50 rounded text-slate-600 select-none group/tag"
-                                                                        onClick={(e) => {
-                                                                            e.stopPropagation();
-                                                                            setExpandedTags(prev => ({...prev, [groupId]: !prev[groupId]}));
-                                                                        }}
-                                                                    >
-                                                                        <div className="text-slate-400 group-hover/tag:text-slate-600">
-                                                                            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                                                        </div>
-                                                                        <span className="text-xs font-bold truncate flex-1">{tag}</span>
-                                                                        <span className="text-[10px] text-slate-400 font-mono bg-slate-100 px-1.5 rounded-full">{grouped[tag].length}</span>
-                                                                    </div>
-                                                                    
-                                                                    {isExpanded && (
-                                                                        <div className="pl-2 ml-1.5 border-l border-slate-100 space-y-0.5">
-                                                                            {grouped[tag].map((ep, idx) => (
-                                                                                <div 
-                                                                                    key={`${groupId}-${idx}`} 
-                                                                                    onClick={() => loadEndpoint(source, ep)}
-                                                                                    className="group flex items-center gap-2 p-1.5 hover:bg-teal-50 rounded cursor-pointer transition-colors"
-                                                                                >
-                                                                                    <MethodBadge method={ep.method} />
-                                                                                    <div className="min-w-0 flex-1">
-                                                                                        <div className="text-xs font-medium text-slate-700 truncate" title={ep.summary || ep.operationId}>
-                                                                                            {ep.summary || ep.operationId || ep.path}
-                                                                                        </div>
-                                                                                    </div>
-                                                                                    <button className="opacity-0 group-hover:opacity-100 p-1 text-teal-600 hover:bg-teal-100 rounded">
-                                                                                        <Play size={10} />
-                                                                                    </button>
-                                                                                </div>
-                                                                            ))}
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            )
-                                                        })}
-                                                    </div>
-                                                );
-                                            })()
-                                        ) : (
-                                            <div className="p-4 text-center text-xs text-slate-400 italic">
-                                                {source.specUrl ? "Loading spec..." : "No spec loaded"}
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        ))
-                    )}
-                    
-                    {isAddingSource ? (
-                        <div className="p-3 bg-slate-50 border border-teal-200 rounded-lg shadow-sm animate-in fade-in slide-in-from-top-2">
-                            <div className="space-y-3">
-                                <div>
-                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Name</label>
-                                    <input 
-                                        autoFocus
-                                        className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:outline-none focus:border-teal-500"
-                                        placeholder="My API"
-                                        value={newSourceData.name}
-                                        onChange={e => setNewSourceData(prev => ({ ...prev, name: e.target.value }))}
-                                    />
-                                </div>
-                                <div>
-                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Base URL</label>
-                                    <input 
-                                        className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:outline-none focus:border-teal-500 font-mono"
-                                        placeholder="https://api.example.com"
-                                        value={newSourceData.baseUrl}
-                                        onChange={e => setNewSourceData(prev => ({ ...prev, baseUrl: e.target.value }))}
-                                    />
-                                </div>
-                                <div>
-                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Swagger/OpenAPI Spec URL (Optional)</label>
-                                    <input 
-                                        className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:outline-none focus:border-teal-500 font-mono"
-                                        placeholder="https://.../swagger.json"
-                                        value={newSourceData.specUrl}
-                                        onChange={e => setNewSourceData(prev => ({ ...prev, specUrl: e.target.value }))}
-                                    />
-                                </div>
-                                <div className="flex gap-2 pt-1">
-                                    <button 
-                                        onClick={handleAddSource}
-                                        disabled={!newSourceData.name || !newSourceData.baseUrl || isFetchingSpec}
-                                        className="flex-1 py-1.5 bg-teal-600 text-white text-xs font-bold rounded hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
-                                    >
-                                        {isFetchingSpec ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-                                        Add
-                                    </button>
-                                    <button 
-                                        onClick={() => { setIsAddingSource(false); setNewSourceData({ name: '', baseUrl: '', specUrl: '' }); }}
-                                        className="px-3 py-1.5 bg-white border border-slate-300 text-slate-600 text-xs font-bold rounded hover:bg-slate-50"
-                                    >
-                                        Cancel
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    ) : (
-                        <button 
-                            onClick={() => setIsAddingSource(true)}
-                            className="w-full py-2 border-2 border-dashed border-slate-200 rounded-lg text-slate-400 hover:border-teal-400 hover:text-teal-600 transition-all text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2"
-                        >
-                            <Plus size={14} /> Add Source
-                        </button>
-                    )}
-                </div>
-            </div>
-            
-            {/* Resizer */}
-            <div 
-            className="absolute right-0 top-0 bottom-0 w-1 hover:w-1.5 cursor-col-resize hover:bg-teal-400 transition-all z-10"
-            onMouseDown={() => {
-                const handler = (e: MouseEvent) => setSidebarWidth(Math.max(250, Math.min(600, e.clientX)));
-                const up = () => { window.removeEventListener('mousemove', handler); window.removeEventListener('mouseup', up); };
-                window.addEventListener('mousemove', handler);
-                window.addEventListener('mouseup', up);
-            }}
-            />
-        </>
-        ) : (
-            <div className="flex flex-col items-center gap-4 mt-4">
-                 <button 
-                    onClick={() => { setIsSidebarOpen(true); setIsAddingSource(true); }}
-                    className="p-2 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded transition-colors"
-                    title="Add API Source"
-                >
-                    <Plus size={18} />
-                </button>
-            </div>
-        )}
+  const TabHeader: React.FC<{ title: string; children?: React.ReactNode }> = ({ title, children }) => (
+      <div className="flex items-center justify-between px-4 py-2 bg-slate-50/50 border-b border-slate-200 min-h-[40px]">
+          <span className="font-bold text-xs text-slate-500 uppercase tracking-wider">{title}</span>
+          <div className="flex items-center gap-2">
+              {children}
+          </div>
       </div>
+  );
 
-      {/* --- Main Content (Composer) --- */}
-      <div className="flex-1 flex flex-col min-w-0 bg-slate-50 relative">
-        {/* Top Bar */}
-        <div className="h-16 bg-white border-b border-slate-200 flex items-center px-4 gap-3 shrink-0 shadow-sm z-10">
-          <select 
-            value={activeRequest.method}
-            onChange={(e) => updateRequest({ method: e.target.value as RestMethod })}
-            className="h-10 px-3 bg-slate-50 border border-slate-300 rounded-lg text-sm font-bold text-slate-700 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500/20"
-          >
-            {['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'].map(m => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
-          
-          <div className="flex-1 relative group">
-            <input 
-              type="text"
-              value={activeRequest.url}
-              onChange={(e) => updateRequest({ url: e.target.value })}
-              placeholder="Enter URL (supports {{ variables }})"
-              className="w-full h-10 pl-4 pr-10 bg-slate-50 border border-slate-300 rounded-lg text-sm font-mono focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500/20 text-slate-800 transition-all"
-            />
-            {activeRequest.meta?.origin === 'swagger' && (
-                 <div className="absolute right-3 top-3 text-xs text-teal-600 bg-teal-50 px-2 rounded pointer-events-none">
-                     Swagger
-                 </div>
-            )}
+  const renderParamsTab = () => (
+      <div className="flex flex-col h-full">
+          <TabHeader title="Query Parameters">
+              <button 
+                  onClick={() => updateRequest('params', [...activeRequest.params, { id: Date.now().toString(), key: '', value: '', enabled: true }])}
+                  className="flex items-center gap-1 text-xs font-medium text-teal-600 hover:text-teal-700 bg-white hover:bg-teal-50 px-2 py-1 rounded border border-slate-200 hover:border-teal-200 transition-colors"
+              >
+                  <Plus size={12} /> Add Parameter
+              </button>
+          </TabHeader>
+          <div className="flex-1 overflow-hidden p-4">
+             <KeyValueEditor 
+                items={activeRequest.params} 
+                onChange={(items) => updateRequest('params', items)} 
+                title="Query Parameters"
+                hideTitle={true}
+                hideAddButton={true}
+             />
+          </div>
+          {activeRequest.pathParams.length > 0 && (
+              <div className="border-t border-slate-200 h-1/3 flex flex-col">
+                  <TabHeader title="Path Parameters" />
+                  <div className="flex-1 overflow-hidden p-4">
+                      <KeyValueEditor 
+                          items={activeRequest.pathParams} 
+                          onChange={(items) => updateRequest('pathParams', items)}
+                          title="Path Params"
+                          hideTitle={true}
+                          readOnlyKeys={true}
+                          hideAddButton={true}
+                      />
+                  </div>
+              </div>
+          )}
+      </div>
+  );
+
+  const renderHeadersTab = () => (
+      <div className="flex flex-col h-full">
+          <TabHeader title="Request Headers">
+              <button 
+                  onClick={() => updateRequest('headers', [...activeRequest.headers, { id: Date.now().toString(), key: '', value: '', enabled: true }])}
+                  className="flex items-center gap-1 text-xs font-medium text-teal-600 hover:text-teal-700 bg-white hover:bg-teal-50 px-2 py-1 rounded border border-slate-200 hover:border-teal-200 transition-colors"
+              >
+                  <Plus size={12} /> Add Header
+              </button>
+          </TabHeader>
+          <div className="flex-1 overflow-hidden p-4">
+             <KeyValueEditor 
+                items={activeRequest.headers} 
+                onChange={(items) => updateRequest('headers', items)} 
+                title="Headers"
+                hideTitle={true}
+                hideAddButton={true}
+             />
+          </div>
+      </div>
+  );
+
+  const renderAuthTab = () => {
+      const currentAuth = activeRequest.auth as any;
+      const selectedCredId = currentAuth.id || '';
+
+      return (
+      <div className="flex flex-col h-full">
+          <TabHeader title="Authorization">
+               <button 
+                   onClick={() => setIsAuthModalOpen(true)}
+                   className="flex items-center gap-1 text-xs font-medium text-teal-600 hover:text-teal-700 bg-white hover:bg-teal-50 px-2 py-1 rounded border border-slate-200 hover:border-teal-200 transition-colors"
+               >
+                   <Shield size={12} /> Manage Credentials
+               </button>
+          </TabHeader>
+          <div className="p-4 overflow-y-auto">
+              <div className="max-w-xl space-y-6">
+                  
+                  <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Credential Profile</label>
+                      <select 
+                          className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-teal-500 transition-colors shadow-sm disabled:bg-slate-50 disabled:text-slate-400 cursor-pointer"
+                          value={selectedCredId}
+                          onChange={(e) => {
+                              if (e.target.value === "") {
+                                 // Clear auth but maybe keep ID undefined so it doesn't match anything
+                                 updateRequest('auth', { type: 'none' });
+                              } else {
+                                 const cred = authCredentials.find(c => c.id === e.target.value);
+                                 if (cred) updateRequest('auth', { ...cred });
+                              }
+                          }}
+                      >
+                          <option value="">No Authorization</option>
+                          {authCredentials.map(c => <option key={c.id} value={c.id}>{c.name} ({c.type})</option>)}
+                      </select>
+                      
+                      {authCredentials.length === 0 && (
+                          <p className="text-xs text-slate-400 flex items-center gap-1">
+                             <Shield size={10} />
+                             No credentials found. <button onClick={() => setIsAuthModalOpen(true)} className="text-teal-600 hover:underline">Create one</button>
+                          </p>
+                      )}
+                  </div>
+
+                  {activeRequest.auth.type !== 'none' ? (
+                     <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg animate-in fade-in slide-in-from-top-1">
+                        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                            <Shield size={12} />
+                            Active Configuration
+                        </div>
+                        <div className="text-sm grid grid-cols-[80px_1fr] gap-y-2">
+                             <div className="text-slate-400 font-medium">Type</div>
+                             <div className="text-slate-700 font-mono bg-white px-2 py-0.5 rounded border border-slate-200 w-fit text-xs">{activeRequest.auth.type}</div>
+                             
+                             {activeRequest.auth.type === 'basic' && (
+                                <>
+                                    <div className="text-slate-400 font-medium">Username</div>
+                                    <div className="text-slate-700 font-mono truncate">{activeRequest.auth.username || '-'}</div>
+                                </>
+                             )}
+                             {activeRequest.auth.type === 'bearer' && (
+                                <>
+                                    <div className="text-slate-400 font-medium">Token</div>
+                                    <div className="text-slate-700 font-mono truncate">••••••••</div>
+                                </>
+                             )}
+                             {activeRequest.auth.type === 'apiKey' && (
+                                <>
+                                    <div className="text-slate-400 font-medium">Key</div>
+                                    <div className="text-slate-700 font-mono truncate">{activeRequest.auth.apiKeyKey || '-'}</div>
+                                    <div className="text-slate-400 font-medium">Placement</div>
+                                    <div className="text-slate-700 font-mono truncate">{activeRequest.auth.apiKeyIn || 'header'}</div>
+                                </>
+                             )}
+                        </div>
+                        <div className="mt-3 pt-3 border-t border-slate-200 text-[10px] text-slate-400 italic">
+                            Values are injected at request time.
+                        </div>
+                     </div>
+                  ) : (
+                      <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                          <Shield size={32} className="mx-auto text-slate-300 mb-2" />
+                          <p className="text-sm text-slate-500 font-medium">Public Access</p>
+                          <p className="text-xs text-slate-400">No authorization headers will be sent.</p>
+                      </div>
+                  )}
+              </div>
+          </div>
+      </div>
+      );
+  };
+
+  const renderBodyTab = () => (
+      <div className="flex flex-col h-full">
+          <TabHeader title="Request Body">
+              <div className="flex items-center gap-2">
+                   <select 
+                      value={activeRequest.bodyType}
+                      onChange={(e) => updateRequest('bodyType', e.target.value)}
+                      className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:outline-none focus:border-teal-500"
+                   >
+                       <option value="none">None</option>
+                       <option value="json">JSON</option>
+                       <option value="xml">XML</option>
+                       <option value="text">Text</option>
+                   </select>
+                   {activeRequest.bodyType === 'json' && (
+                       <button 
+                          onClick={() => bodyEditorRef.current?.format()}
+                          className="p-1 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded"
+                          title="Format Body"
+                       >
+                          <Settings size={14} />
+                       </button>
+                   )}
+              </div>
+          </TabHeader>
+          {activeRequest.bodyType === 'none' ? (
+              <div className="flex-1 flex items-center justify-center text-slate-400 italic text-sm bg-slate-50/30">
+                  This request has no body.
+              </div>
+          ) : (
+              <div className="flex-1 overflow-hidden relative">
+                  <CodeEditor 
+                      ref={bodyEditorRef}
+                      language={activeRequest.bodyType === 'json' ? 'json' : activeRequest.bodyType === 'xml' ? 'xml' : 'text'}
+                      value={activeRequest.body}
+                      onChange={(val) => updateRequest('body', val)}
+                  />
+              </div>
+          )}
+      </div>
+  );
+
+  return (
+    <div className="flex h-full w-full">
+       {/* Sidebar */}
+       <div 
+          className="flex flex-col border-r border-slate-200 bg-slate-50 transition-all duration-300 overflow-hidden relative"
+          style={{ width: isSidebarOpen ? sidebarWidth : 0 }}
+       >
+          <div className="p-3 border-b border-slate-200 flex justify-between items-center bg-white sticky top-0 z-10">
+              <div className="font-bold text-slate-700 text-sm flex items-center gap-2">
+                  <Database size={16} className="text-teal-600" />
+                  API Sources
+              </div>
+              <button 
+                  onClick={() => setIsAddingSource(!isAddingSource)} 
+                  className={`p-1 rounded hover:bg-slate-100 ${isAddingSource ? 'text-teal-600 bg-teal-50' : 'text-slate-400'}`}
+                  title="Add Source"
+              >
+                  <Plus size={16} />
+              </button>
           </div>
 
-          <button 
-            onClick={executeRequest}
-            disabled={isLoading}
-            className="h-10 px-6 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-bold text-sm shadow-md shadow-teal-600/20 transition-all flex items-center gap-2 min-w-[100px] justify-center"
-          >
-            <div className="flex items-center gap-2">
-                <Play size={16} className={isLoading ? 'animate-spin' : ''} />
-                {isLoading ? 'Sending...' : 'Send'}
-            </div>
-          </button>
-        </div>
-        
-        {/* Response / Request Body Area */}
-        <div className="flex-1 flex flex-col min-h-0">
-             {/* Request Config */}
-             <div className="flex-1 flex flex-col min-h-0 border-b border-slate-200">
-                 {/* Tabs */}
-                 <div className="flex items-center px-4 border-b border-slate-200 bg-white">
-                    <button 
-                        onClick={() => setActiveTab('params')} 
-                        className={`px-4 py-3 text-xs font-bold uppercase tracking-wide border-b-2 transition-colors ${activeTab === 'params' ? 'border-teal-500 text-teal-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}
-                    >
-                        Params {activeRequest.params.length > 0 && `(${activeRequest.params.length})`}
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('auth')} 
-                        className={`px-4 py-3 text-xs font-bold uppercase tracking-wide border-b-2 transition-colors ${activeTab === 'auth' ? 'border-teal-500 text-teal-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}
-                    >
-                        Auth {activeRequest.auth.type !== 'none' && '•'}
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('headers')} 
-                        className={`px-4 py-3 text-xs font-bold uppercase tracking-wide border-b-2 transition-colors ${activeTab === 'headers' ? 'border-teal-500 text-teal-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}
-                    >
-                        Headers {activeRequest.headers.length > 0 && `(${activeRequest.headers.length})`}
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('body')} 
-                        className={`px-4 py-3 text-xs font-bold uppercase tracking-wide border-b-2 transition-colors ${activeTab === 'body' ? 'border-teal-500 text-teal-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}
-                    >
-                        Body {activeRequest.bodyType !== 'none' && '•'}
-                    </button>
+          <div className="flex-1 overflow-y-auto">
+             {isAddingSource && (
+                 <div className="p-3 bg-white border-b border-slate-200 animate-in slide-in-from-top-2">
+                     <div className="space-y-2 mb-2">
+                         <input 
+                            placeholder="Spec URL (OpenAPI/Swagger)"
+                            className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:border-teal-500 focus:outline-none"
+                            value={newSourceData.specUrl}
+                            onChange={e => setNewSourceData({ ...newSourceData, specUrl: e.target.value })}
+                         />
+                         <div className="text-center text-[10px] text-slate-400">- OR -</div>
+                         <input 
+                            placeholder="Name"
+                            className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:border-teal-500 focus:outline-none"
+                            value={newSourceData.name}
+                            onChange={e => setNewSourceData({ ...newSourceData, name: e.target.value })}
+                         />
+                         <input 
+                            placeholder="Base URL"
+                            className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:border-teal-500 focus:outline-none"
+                            value={newSourceData.baseUrl}
+                            onChange={e => setNewSourceData({ ...newSourceData, baseUrl: e.target.value })}
+                         />
+                     </div>
+                     <div className="flex gap-2">
+                         <button 
+                            onClick={handleAddSource}
+                            disabled={isFetchingSpec}
+                            className="flex-1 bg-teal-600 hover:bg-teal-700 text-white text-xs py-1.5 rounded font-medium flex justify-center items-center gap-1"
+                         >
+                            {isFetchingSpec ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                            Add
+                         </button>
+                         <button 
+                            onClick={() => setIsAddingSource(false)}
+                            className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs py-1.5 rounded font-medium"
+                         >
+                            Cancel
+                         </button>
+                     </div>
                  </div>
-
-                 {/* Tab Content */}
-                 <div className="flex-1 overflow-hidden relative bg-slate-50/50">
-                    {activeTab === 'params' && (
-                        <div className="absolute inset-0 p-4 overflow-y-auto">
-                            <div className="space-y-4 max-w-4xl mx-auto">
-                                <KeyValueEditor 
-                                    title="Query Parameters" 
-                                    items={activeRequest.params} 
-                                    onChange={(p) => updateRequest({ params: p })} 
-                                />
-                                {activeRequest.pathParams.length > 0 && (
-                                    <KeyValueEditor 
-                                        title="Path Parameters" 
-                                        items={activeRequest.pathParams} 
-                                        onChange={(p) => updateRequest({ pathParams: p })} 
-                                        readOnlyKeys
-                                        hideAddButton
-                                    />
-                                )}
-                            </div>
-                        </div>
-                    )}
-                    
-                    {activeTab === 'headers' && (
-                        <div className="absolute inset-0 p-4 overflow-y-auto">
-                            <div className="max-w-4xl mx-auto h-full">
-                                <KeyValueEditor 
-                                    title="HTTP Headers" 
-                                    items={activeRequest.headers} 
-                                    onChange={(h) => updateRequest({ headers: h })} 
-                                />
-                            </div>
-                        </div>
-                    )}
-
-                    {activeTab === 'auth' && (
-                        <div className="absolute inset-0 p-6 overflow-y-auto">
-                            <div className="max-w-2xl mx-auto bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
-                                <h3 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
-                                    <Shield size={16} className="text-teal-600" />
-                                    Authentication
-                                </h3>
-                                
-                                <div className="mb-4">
-                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Auth Type</label>
-                                    <select 
-                                        value={activeRequest.auth.type}
-                                        onChange={(e) => updateRequest({ auth: { ...activeRequest.auth, type: e.target.value as any } })}
-                                        className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-teal-500"
-                                    >
-                                        <option value="none">No Auth</option>
-                                        <option value="basic">Basic Auth</option>
-                                        <option value="bearer">Bearer Token</option>
-                                        <option value="apiKey">API Key</option>
-                                    </select>
+             )}
+             
+             {/* Source List */}
+             {apiSources.map(source => (
+                 <div key={source.id} className="border-b border-slate-100 last:border-0">
+                     <div 
+                        className="px-3 py-2 hover:bg-white cursor-pointer flex items-center justify-between group"
+                        onClick={() => toggleSource(source.id)}
+                     >
+                         <div className="flex items-center gap-2 overflow-hidden">
+                             {expandedSources[source.id] ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />}
+                             <span className="text-xs font-bold text-slate-700 truncate">{source.name}</span>
+                         </div>
+                         <div className="opacity-0 group-hover:opacity-100 flex items-center">
+                            {source.specUrl && (
+                                <span className="text-[9px] bg-teal-50 text-teal-600 px-1 rounded border border-teal-100 mr-2">OAS</span>
+                            )}
+                         </div>
+                     </div>
+                     
+                     {expandedSources[source.id] && (
+                         <div className="bg-slate-50/50 pb-2">
+                            {source.spec ? (
+                                <div className="pl-2">
+                                    {parseOpenApiPaths(source.spec).map((endpoint: any, idx: number) => (
+                                        <div 
+                                            key={idx}
+                                            onClick={() => loadEndpoint(source, endpoint)}
+                                            className="px-3 py-1.5 pl-6 hover:bg-teal-50 cursor-pointer flex items-center gap-2 group"
+                                            title={endpoint.summary}
+                                        >
+                                            <span className={`
+                                                text-[9px] font-bold px-1 rounded min-w-[32px] text-center
+                                                ${endpoint.method === 'GET' ? 'bg-blue-100 text-blue-700' : 
+                                                  endpoint.method === 'POST' ? 'bg-green-100 text-green-700' : 
+                                                  endpoint.method === 'PUT' ? 'bg-orange-100 text-orange-700' : 
+                                                  endpoint.method === 'DELETE' ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-600'}
+                                            `}>
+                                                {endpoint.method}
+                                            </span>
+                                            <span className="text-xs text-slate-600 truncate flex-1">{endpoint.path}</span>
+                                            <Plus size={12} className="text-teal-600 opacity-0 group-hover:opacity-100" />
+                                        </div>
+                                    ))}
                                 </div>
+                            ) : (
+                                <div className="text-xs text-slate-400 italic px-6 py-2">
+                                    No spec loaded. Endpoints not available.
+                                </div>
+                            )}
+                         </div>
+                     )}
+                 </div>
+             ))}
+             
+             {apiSources.length === 0 && (
+                 <div className="p-4 text-center text-xs text-slate-400 italic">
+                     No API sources defined.
+                 </div>
+             )}
+          </div>
+       </div>
 
-                                {activeRequest.auth.type !== 'none' && (
-                                    <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
-                                        {activeRequest.auth.type === 'basic' && (
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div>
-                                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Username</label>
-                                                    <input 
-                                                        value={activeRequest.auth.username || ''}
-                                                        onChange={(e) => updateRequest({ auth: { ...activeRequest.auth, username: e.target.value } })}
-                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-sm focus:border-teal-500 focus:outline-none"
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Password</label>
-                                                    <input 
-                                                        type="password"
-                                                        value={activeRequest.auth.password || ''}
-                                                        onChange={(e) => updateRequest({ auth: { ...activeRequest.auth, password: e.target.value } })}
-                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-sm focus:border-teal-500 focus:outline-none"
-                                                    />
-                                                </div>
-                                            </div>
-                                        )}
+       {/* Main Content */}
+       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-white">
+            {/* Top Bar */}
+            <div className="h-14 border-b border-slate-200 flex items-center px-4 gap-3 bg-white shrink-0">
+                <button 
+                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                    className="p-1.5 hover:bg-slate-100 rounded text-slate-400 mr-2"
+                >
+                    {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+                </button>
+                
+                <div className="flex-1 flex items-center gap-0 shadow-sm rounded-lg border border-slate-300 overflow-hidden h-9">
+                    <select 
+                        value={activeRequest.method}
+                        onChange={(e) => updateRequest('method', e.target.value)}
+                        className={`
+                            h-full px-3 text-xs font-bold border-r border-slate-300 bg-slate-50 focus:outline-none appearance-none text-center min-w-[80px]
+                            ${activeRequest.method === 'GET' ? 'text-blue-700' : 
+                              activeRequest.method === 'POST' ? 'text-green-700' : 
+                              activeRequest.method === 'DELETE' ? 'text-red-700' : 'text-orange-700'}
+                        `}
+                    >
+                        <option value="GET">GET</option>
+                        <option value="POST">POST</option>
+                        <option value="PUT">PUT</option>
+                        <option value="PATCH">PATCH</option>
+                        <option value="DELETE">DELETE</option>
+                        <option value="HEAD">HEAD</option>
+                        <option value="OPTIONS">OPTIONS</option>
+                    </select>
+                    <input 
+                        className="flex-1 h-full px-3 text-sm focus:outline-none font-mono text-slate-700"
+                        placeholder="https://api.example.com/v1/resource"
+                        value={activeRequest.url}
+                        onChange={(e) => updateRequest('url', e.target.value)}
+                    />
+                    <button 
+                        onClick={handleRun}
+                        disabled={isLoading}
+                        className="h-full px-6 bg-teal-600 hover:bg-teal-700 text-white font-bold text-sm flex items-center gap-2 transition-colors disabled:bg-slate-300"
+                    >
+                        {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                        Send
+                    </button>
+                </div>
+            </div>
 
-                                        {activeRequest.auth.type === 'bearer' && (
-                                            <div>
-                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Token</label>
-                                                <input 
-                                                    value={activeRequest.auth.token || ''}
-                                                    onChange={(e) => updateRequest({ auth: { ...activeRequest.auth, token: e.target.value } })}
-                                                    placeholder="ey..."
-                                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-sm font-mono focus:border-teal-500 focus:outline-none"
-                                                />
-                                            </div>
-                                        )}
+            {/* Request/Response Area */}
+            <div className="flex-1 flex flex-col min-h-0">
+                <div className="flex-1 flex flex-col lg:flex-row min-h-0">
+                    
+                    {/* Request Editor */}
+                    <div className="flex-1 flex flex-col min-h-0 border-r border-slate-200">
+                        {/* Tabs */}
+                        <div className="flex items-center px-4 border-b border-slate-200 bg-white">
+                            {(['params', 'auth', 'headers', 'body'] as const).map(tab => (
+                                <button
+                                    key={tab}
+                                    onClick={() => setActiveTab(tab)}
+                                    className={`
+                                        px-4 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-colors
+                                        ${activeTab === tab 
+                                            ? 'border-teal-500 text-teal-600' 
+                                            : 'border-transparent text-slate-400 hover:text-slate-600 hover:border-slate-200'}
+                                    `}
+                                >
+                                    {tab}
+                                    {tab === 'params' && activeRequest.params.length > 0 && <span className="ml-1.5 text-[9px] bg-slate-100 px-1 rounded-full text-slate-500">{activeRequest.params.filter(p => p.enabled).length}</span>}
+                                    {tab === 'headers' && activeRequest.headers.length > 0 && <span className="ml-1.5 text-[9px] bg-slate-100 px-1 rounded-full text-slate-500">{activeRequest.headers.filter(h => h.enabled).length}</span>}
+                                    {tab === 'auth' && activeRequest.auth.type !== 'none' && <span className="ml-1.5 w-1.5 h-1.5 inline-block rounded-full bg-teal-500"></span>}
+                                </button>
+                            ))}
+                        </div>
+                        
+                        {/* Tab Content */}
+                        <div className="flex-1 min-h-0 overflow-hidden bg-slate-50/10">
+                            {activeTab === 'params' && renderParamsTab()}
+                            {activeTab === 'headers' && renderHeadersTab()}
+                            {activeTab === 'auth' && renderAuthTab()}
+                            {activeTab === 'body' && renderBodyTab()}
+                        </div>
+                    </div>
 
-                                        {activeRequest.auth.type === 'apiKey' && (
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div>
-                                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Key</label>
-                                                    <input 
-                                                        value={activeRequest.auth.apiKeyKey || ''}
-                                                        onChange={(e) => updateRequest({ auth: { ...activeRequest.auth, apiKeyKey: e.target.value } })}
-                                                        placeholder="X-API-Key"
-                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-sm font-mono focus:border-teal-500 focus:outline-none"
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Value</label>
-                                                    <input 
-                                                        value={activeRequest.auth.apiKeyValue || ''}
-                                                        onChange={(e) => updateRequest({ auth: { ...activeRequest.auth, apiKeyValue: e.target.value } })}
-                                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-sm font-mono focus:border-teal-500 focus:outline-none"
-                                                    />
-                                                </div>
-                                                <div className="col-span-2">
-                                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Add To</label>
-                                                    <div className="flex gap-4">
-                                                        <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                                                            <input 
-                                                                type="radio" 
-                                                                className="accent-teal-600"
-                                                                checked={activeRequest.auth.apiKeyIn !== 'query'}
-                                                                onChange={() => updateRequest({ auth: { ...activeRequest.auth, apiKeyIn: 'header' } })}
-                                                            /> Header
-                                                        </label>
-                                                        <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                                                            <input 
-                                                                type="radio" 
-                                                                className="accent-teal-600"
-                                                                checked={activeRequest.auth.apiKeyIn === 'query'}
-                                                                onChange={() => updateRequest({ auth: { ...activeRequest.auth, apiKeyIn: 'query' } })}
-                                                            /> Query Params
-                                                        </label>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                                
-                                <div className="mt-6 pt-4 border-t border-slate-100">
-                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Saved Credentials</label>
-                                    <div className="flex flex-wrap gap-2">
-                                        {authCredentials.length === 0 ? (
-                                            <span className="text-xs text-slate-400 italic">No saved credentials. Use the manager below.</span>
-                                        ) : (
-                                            authCredentials.map(cred => (
-                                                <button 
-                                                    key={cred.id}
-                                                    onClick={() => applyAuthCredential(cred.id)}
-                                                    className="px-3 py-1.5 bg-slate-50 hover:bg-teal-50 border border-slate-200 hover:border-teal-200 text-slate-600 hover:text-teal-700 rounded-full text-xs transition-colors flex items-center gap-1"
-                                                >
-                                                    <Shield size={10} /> {cred.name}
-                                                </button>
-                                            ))
-                                        )}
+                    {/* Response Viewer */}
+                    <div className={`flex-1 flex flex-col min-h-0 bg-slate-50 ${response ? '' : 'justify-center items-center'}`}>
+                        {response ? (
+                            <>
+                                <div className="px-4 py-2 border-b border-slate-200 bg-white flex justify-between items-center shadow-sm z-10">
+                                    <div className="flex items-center gap-4">
+                                        <div className={`text-sm font-bold ${response.status >= 200 && response.status < 300 ? 'text-green-600' : 'text-red-600'}`}>
+                                            {response.status} {response.statusText}
+                                        </div>
+                                        <div className="text-xs text-slate-500 flex items-center gap-1">
+                                            <Clock size={12} /> {response.time}ms
+                                        </div>
+                                        <div className="text-xs text-slate-500 flex items-center gap-1">
+                                            <Download size={12} /> {(response.size / 1024).toFixed(2)} KB
+                                        </div>
                                     </div>
                                     <button 
-                                        onClick={() => setIsAuthModalOpen(true)}
-                                        className="mt-4 text-xs font-medium text-teal-600 hover:text-teal-700 flex items-center gap-1"
+                                        className="text-xs text-teal-600 hover:text-teal-700 font-medium"
+                                        onClick={() => {
+                                            const blob = new Blob([response.data], { type: 'application/json' });
+                                            const url = URL.createObjectURL(blob);
+                                            const a = document.createElement('a');
+                                            a.href = url;
+                                            a.download = `response_${Date.now()}.json`;
+                                            a.click();
+                                        }}
                                     >
-                                        <Settings size={12} /> Manage Credentials
+                                        Save Response
                                     </button>
                                 </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {activeTab === 'body' && (
-                         <div className="absolute inset-0 flex flex-col p-4">
-                             <div className="flex items-center justify-between mb-2">
-                                <div className="flex gap-4">
-                                    <label className="flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer">
-                                        <input 
-                                            type="radio" 
-                                            className="accent-teal-600"
-                                            checked={activeRequest.bodyType === 'none'}
-                                            onChange={() => updateRequest({ bodyType: 'none' })}
-                                        /> None
-                                    </label>
-                                    <label className="flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer">
-                                        <input 
-                                            type="radio" 
-                                            className="accent-teal-600"
-                                            checked={activeRequest.bodyType === 'json'}
-                                            onChange={() => updateRequest({ bodyType: 'json' })}
-                                        /> JSON
-                                    </label>
-                                    <label className="flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer">
-                                        <input 
-                                            type="radio" 
-                                            className="accent-teal-600"
-                                            checked={activeRequest.bodyType === 'xml'}
-                                            onChange={() => updateRequest({ bodyType: 'xml' })}
-                                        /> XML
-                                    </label>
-                                    <label className="flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer">
-                                        <input 
-                                            type="radio" 
-                                            className="accent-teal-600"
-                                            checked={activeRequest.bodyType === 'text'}
-                                            onChange={() => updateRequest({ bodyType: 'text' })}
-                                        /> Text
-                                    </label>
+                                <div className="flex-1 overflow-hidden relative">
+                                    <CodeEditor 
+                                        language="json" 
+                                        value={response.data} 
+                                        onChange={() => {}} 
+                                        readOnly={true}
+                                    />
                                 </div>
-                             </div>
-                             
-                             {activeRequest.bodyType !== 'none' ? (
-                                 <div className="flex-1 border border-slate-300 rounded-lg overflow-hidden">
-                                     <CodeEditor 
-                                        ref={bodyEditorRef}
-                                        language={activeRequest.bodyType === 'json' ? 'json' : activeRequest.bodyType === 'xml' ? 'xml' : 'text'}
-                                        value={activeRequest.body}
-                                        onChange={(val) => updateRequest({ body: val || '' })}
-                                     />
-                                 </div>
-                             ) : (
-                                 <div className="flex-1 flex flex-col items-center justify-center text-slate-300 bg-slate-50 rounded-lg border border-slate-200 border-dashed">
-                                     <FileCode size={48} className="mb-2 opacity-50" />
-                                     <span className="text-sm">No Body</span>
-                                 </div>
-                             )}
-                         </div>
-                    )}
-                 </div>
-             </div>
-             
-             {/* Response Area */}
-             <div className="h-[40%] min-h-[200px] flex flex-col border-t border-slate-200 bg-white">
-                 <div className="px-4 py-2 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                    <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Response</div>
-                    {response && (
-                        <div className="flex items-center gap-4 text-xs font-mono">
-                            <span className={`px-2 py-0.5 rounded border font-bold ${getStatusColor(response.status)}`}>
-                                {response.status} {response.statusText}
-                            </span>
-                            <span className="text-slate-500 flex items-center gap-1">
-                                <Clock size={12} /> {response.time}ms
-                            </span>
-                            <span className="text-slate-500 flex items-center gap-1">
-                                <Database size={12} /> {response.size}B
-                            </span>
-                        </div>
-                    )}
-                 </div>
-                 
-                 <div className="flex-1 relative">
-                    {response ? (
-                        <CodeEditor 
-                            language="json" 
-                            value={response.data} 
-                            onChange={() => {}} 
-                            readOnly={true}
-                        />
-                    ) : (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300">
-                             <Send size={32} className="mb-2 opacity-50" />
-                             <span className="text-sm">Enter URL and click Send</span>
-                        </div>
-                    )}
-                 </div>
-             </div>
-        </div>
-      </div>
+                            </>
+                        ) : (
+                            <div className="text-center text-slate-300">
+                                <Globe size={48} className="mx-auto mb-4 opacity-50" />
+                                <p className="text-sm font-medium">Enter URL and click Send</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+       </div>
 
-      <ToolsPanel 
+       <ToolsPanel 
             variablesObj={variables}
             variablesJson={variablesJson}
             onVariablesChange={onVariablesChange}
@@ -1269,17 +1063,23 @@ export const RestEditor: React.FC<RestEditorProps> = ({
             functions={functions}
             onFunctionsChange={onFunctionsChange}
             activeEditorType={EditorType.REST_API}
+            onInsert={(text) => {
+                if (activeTab === 'body') {
+                    bodyEditorRef.current?.insertText(text);
+                }
+            }}
+            onUpdateContent={(val) => {
+                if (activeTab === 'body') updateRequest('body', val);
+            }}
             onAiAssist={onAiAssist}
-            onUpdateContent={handleUpdateContent}
-        />
-      
-      {/* Auth Modal */}
-      <AuthManagerModal 
-        isOpen={isAuthModalOpen}
-        credentials={authCredentials}
-        onClose={() => setIsAuthModalOpen(false)}
-        onUpdateCredentials={onAuthCredentialsChange}
-      />
+       />
+       
+       <AuthManagerModal 
+           isOpen={isAuthModalOpen}
+           credentials={authCredentials}
+           onClose={() => setIsAuthModalOpen(false)}
+           onUpdateCredentials={onAuthCredentialsChange}
+       />
     </div>
   );
 };

@@ -80,7 +80,7 @@ export const VariablesEditorModal: React.FC<VariablesEditorModalProps> = ({
              </button>
              <button
                onClick={() => {
-                 onSave(value);
+                 if (onSave) onSave(value);
                  onClose();
                }}
                disabled={!isDirty}

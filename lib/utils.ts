@@ -74,15 +74,17 @@ const registerHelpers = (functions: UserFunction[]) => {
   });
 
   // Also register direct helpers for convenience {{myFunc arg1}}
-  functions.forEach(func => {
-    try {
-      // eslint-disable-next-line no-new-func
-      const jsFunc = new Function(...func.params, func.body);
-      Handlebars.registerHelper(func.name, jsFunc as any);
-    } catch (e) {
-      console.error(`Failed to register helper ${func.name}`, e);
-    }
-  });
+  if (Array.isArray(functions)) {
+    functions.forEach(func => {
+      try {
+        // eslint-disable-next-line no-new-func
+        const jsFunc = new Function(...func.params, func.body);
+        Handlebars.registerHelper(func.name, jsFunc as any);
+      } catch (e) {
+        console.error(`Failed to register helper ${func.name}`, e);
+      }
+    });
+  }
 };
 
 /**

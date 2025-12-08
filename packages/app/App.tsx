@@ -1,31 +1,38 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { EditorType, UserFunction, DbConnection, HostImage, NamedAuthConfig, ApiSource } from '../../lib/types';
+import { EditorType, UserFunction, DbConnection, HostImage, NamedAuthConfig, ApiSource, AgentConfig } from '../../lib/types';
 import { JsonEditor } from '../json-editor/JsonEditor';
+import { YamlEditor } from '../yaml-editor/YamlEditor';
 import { HtmlEditor } from '../html-editor/HtmlEditor';
 import { ScriptEditor } from '../script-editor/ScriptEditor';
 import { DbQueryEditor } from '../db-query-editor/DbQueryEditor';
 import { XmlEditor } from '../xml-editor/XmlEditor';
 import { RestEditor } from '../rest-editor/RestEditor';
-import { FileJson, Mail, Workflow, Leaf, Settings, Database, FileCode, Globe } from 'lucide-react';
+import { AgentEditor } from '../agent-editor/AgentEditor';
+import { FileJson, Mail, Workflow, Leaf, Settings, Database, FileCode, Globe, Bot, FileText } from 'lucide-react';
 import { DEFAULT_EMAIL_SNIPPET_GROUPS, DEFAULT_SQL_DIALECT_DATA, DEFAULT_XML_SNIPPET_GROUPS } from '../../lib/constants';
 import {
   DEFAULT_VARIABLES_JSON,
   DEFAULT_JSON_CONTENT,
+  DEFAULT_YAML_CONTENT,
   DEFAULT_HTML_CONTENT,
   DEFAULT_SCRIPT_CONTENT,
   DEFAULT_SQL_CONTENT,
   DEFAULT_XML_CONTENT,
   DEFAULT_FUNCTIONS,
   DEFAULT_DB_CONNECTIONS,
-  DEFAULT_HOST_IMAGES
+  DEFAULT_HOST_IMAGES,
+  DEFAULT_AGENT_CONFIG
 } from '../../lib/defaults';
 import {
   generateJsonAssistResponse,
+  generateYamlAssistResponse,
   generateHtmlAssistResponse,
   generateScriptAssistResponse,
   generateSqlAssistResponse,
   generateXmlAssistResponse,
-  generateRestAssistResponse
+  generateRestAssistResponse,
+  runAgentSimulation,
+  generateAgentAssistResponse
 } from '../../lib/ai-service';
 
 export default function App() {
@@ -34,10 +41,17 @@ export default function App() {
   
   // Content State
   const [jsonContent, setJsonContent] = useState(DEFAULT_JSON_CONTENT);
+  const [yamlContent, setYamlContent] = useState(DEFAULT_YAML_CONTENT);
   const [htmlContent, setHtmlContent] = useState(DEFAULT_HTML_CONTENT);
   const [scriptContent, setScriptContent] = useState(DEFAULT_SCRIPT_CONTENT);
   const [sqlContent, setSqlContent] = useState(DEFAULT_SQL_CONTENT);
   const [xmlContent, setXmlContent] = useState(DEFAULT_XML_CONTENT);
+  
+  // Agent State
+  const [agentConfig, setAgentConfig] = useState<AgentConfig>(DEFAULT_AGENT_CONFIG);
+  const [agentRunResult, setAgentRunResult] = useState<string | null>(null);
+  const [isAgentRunning, setIsAgentRunning] = useState(false);
+  const [externalRunTrigger, setExternalRunTrigger] = useState<{message: string, timestamp: number} | null>(null);
 
   // Context State
   const [variablesJson, setVariablesJson] = useState<string>(DEFAULT_VARIABLES_JSON);
@@ -116,6 +130,21 @@ export default function App() {
       setDbExecutionResult(null); // Optional: clear result or leave previous
   };
 
+  // Agent Execution
+  const handleRunAgent = () => {
+      // Trigger execution via the chat panel inside the Agent Editor
+      // We do this by updating a trigger state which the AgentEditor listens to
+      // and then it triggers the AI Assist flow which acts as the "Run"
+      // Note: The actual execution logic is inside the `runAgentSimulation` which is called
+      // by the chat panel when we provide a specific "Run Prompt" to onAiAssist.
+      
+      // Since `runAgentSimulation` requires `userMessage`, we trigger the UI to send it.
+      setExternalRunTrigger({ 
+          message: agentConfig.userMessageInput, 
+          timestamp: Date.now() 
+      });
+  };
+
   // Image Handlers
   const handleAddImage = (img: HostImage) => {
       setHostImages(prev => [img, ...prev]);
@@ -140,6 +169,10 @@ export default function App() {
     return generateJsonAssistResponse(prompt, jsonContent, variablesJson, functions);
   };
 
+  const handleYamlAssist = async (prompt: string): Promise<string> => {
+    return generateYamlAssistResponse(prompt, yamlContent, variablesJson, functions);
+  };
+
   const handleHtmlAssist = async (prompt: string): Promise<string> => {
     // Pass the current state of hostImages, not the default
     return generateHtmlAssistResponse(prompt, htmlContent, variablesJson, functions, hostImages);
@@ -162,6 +195,43 @@ export default function App() {
     return generateRestAssistResponse(prompt, variablesJson, functions, apiSources);
   };
 
+  const handleAgentAssist = async (prompt: string): Promise<string> => {
+      // If the prompt matches the user input template (triggered via Run button), run the simulation
+      // Otherwise, assume it's a configuration assistance request
+      
+      // Heuristic: If prompt is long or matches our run trigger, treat as execution
+      // But cleaner: AgentEditor handles the distinction. 
+      // The ToolsPanel calls this. If it was triggered by `runTrigger`, it's an execution.
+      
+      // Check if this prompt looks like an execution request (e.g. populated template)
+      // Since we don't have easy flag here, we'll try to run simulation if the prompt is NOT a question.
+      // Actually, let's just assume `runAgentSimulation` handles the "User Input" and `generateAgentAssistResponse` handles "Help me configure".
+      
+      // Dual-mode handler:
+      // 1. If triggered by RUN button -> It sends the USER MESSAGE -> We simulate agent response.
+      // 2. If typed in chat -> It is a question -> We help configure.
+      
+      // Simple heuristic: If prompt starts with "Help" or "How" or "Generate", likely config help.
+      // If prompt looks like data/message, likely execution.
+      // Better yet: We will assume everything sent to this handler is for SIMULATION if `externalRunTrigger` was recently set.
+      // But `externalRunTrigger` is reset? No.
+      
+      // Let's rely on the prompt content.
+      // If it matches `agentConfig.userMessageInput` (raw or interpolated), it's likely a run.
+      // BUT `runAgentSimulation` is actually what we want when "Run" is clicked.
+      
+      // For now, let's try to run simulation.
+      setIsAgentRunning(true);
+      try {
+          // We can try to use a specific prefix if we want to differentiate?
+          // No, let's just use `runAgentSimulation` for the "Chat" in Agent Editor, 
+          // essentially making the chat window the "Test Console".
+          return await runAgentSimulation(agentConfig, prompt, variablesObj, functions);
+      } finally {
+          setIsAgentRunning(false);
+      }
+  };
+
   // Common props for all editors
   const commonProps = {
     variables: variablesObj,
@@ -180,6 +250,15 @@ export default function App() {
             content={jsonContent}
             onChange={setJsonContent}
             onAiAssist={handleJsonAssist}
+            {...commonProps}
+          />
+        );
+      case EditorType.YAML_CONFIG:
+        return (
+          <YamlEditor 
+            content={yamlContent}
+            onChange={setYamlContent}
+            onAiAssist={handleYamlAssist}
             {...commonProps}
           />
         );
@@ -244,6 +323,19 @@ export default function App() {
             {...commonProps}
           />
         );
+      case EditorType.AGENT:
+        return (
+            <AgentEditor 
+                config={agentConfig}
+                onChange={setAgentConfig}
+                onAiAssist={handleAgentAssist}
+                onRun={handleRunAgent}
+                isRunning={isAgentRunning}
+                runError={agentRunResult} // We re-purpose this or add new state
+                externalRunTrigger={externalRunTrigger}
+                {...commonProps}
+            />
+        );
       default:
         return <div>Select an editor</div>;
     }
@@ -268,6 +360,12 @@ export default function App() {
                onClick={() => setActiveEditor(EditorType.JSON_REST)}
                icon={<FileJson size={16} />}
                label="JSON"
+             />
+             <NavPill 
+               active={activeEditor === EditorType.YAML_CONFIG}
+               onClick={() => setActiveEditor(EditorType.YAML_CONFIG)}
+               icon={<FileText size={16} />}
+               label="YAML"
              />
              <NavPill 
                active={activeEditor === EditorType.REST_API}
@@ -298,6 +396,12 @@ export default function App() {
                onClick={() => setActiveEditor(EditorType.DB_QUERY)}
                icon={<Database size={16} />}
                label="DB Query"
+             />
+             <NavPill 
+               active={activeEditor === EditorType.AGENT}
+               onClick={() => setActiveEditor(EditorType.AGENT)}
+               icon={<Bot size={16} />}
+               label="Agent"
              />
           </div>
         </div>

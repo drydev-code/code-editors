@@ -11,7 +11,7 @@ interface ImageGalleryPanelProps {
 }
 
 export const ImageGalleryPanel: React.FC<ImageGalleryPanelProps> = ({ 
-    images, 
+    images = [], 
     onInsert,
     onAddImage,
     onDeleteImage

@@ -22,13 +22,13 @@ interface JsonEditorProps {
 }
 
 export const JsonEditor: React.FC<JsonEditorProps> = ({ 
-    content, 
+    content = '', 
     onChange, 
-    variables, 
-    variablesJson,
+    variables = {}, 
+    variablesJson = '{}',
     onVariablesChange,
     variableError,
-    functions,
+    functions = [],
     onFunctionsChange,
     onAiAssist
 }) => {
@@ -40,13 +40,28 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
     // Editor Ref
     const editorRef = useRef<CodeEditorRef>(null);
 
-    // Resize State
+    // Resize & Layout State
     const [previewWidth, setPreviewWidth] = useState(500);
+    const [containerWidth, setContainerWidth] = useState(0);
     const [isResizing, setIsResizing] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
     const startResizing = useCallback(() => setIsResizing(true), []);
     const stopResizing = useCallback(() => setIsResizing(false), []);
+
+    // Layout Breakpoint
+    const isStacked = containerWidth < 768;
+
+    useEffect(() => {
+        if (!containerRef.current) return;
+        const observer = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                setContainerWidth(entry.contentRect.width);
+            }
+        });
+        observer.observe(containerRef.current);
+        return () => observer.disconnect();
+    }, []);
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -75,9 +90,8 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
         };
     }, [isResizing, stopResizing]);
 
-    // Check for missing functions (supports {{#func:name(...)}})
+    // Check for missing functions
     useEffect(() => {
-        // Regex matches: {{#func:name(
         const regex = /{{#func:([a-zA-Z0-9_]+)\(/g;
         const missing: Set<string> = new Set();
         let match;
@@ -88,7 +102,6 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
             }
         }
         
-        // Also support legacy {{ func 'name' }} detection just in case
         const legacyRegex = /{{\s*func\s+['"]([a-zA-Z0-9_]+)['"]/g;
         while ((match = legacyRegex.exec(content)) !== null) {
             const funcName = match[1];
@@ -102,15 +115,12 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
 
     useEffect(() => {
         try {
-            // First interpolate using Handlebars with pre-processing
             const interpolated = interpolateString(content, variables, functions);
-            // Then validate JSON
             const parsed = JSON.parse(interpolated);
             setPreview(JSON.stringify(parsed, null, 2));
             setError(null);
         } catch (e: any) {
             setError(e.message);
-            // If JSON parse fails, usually we still want to see the interpolated string to debug
             try {
                 const interpolated = interpolateString(content, variables, functions);
                 setPreview(interpolated); 
@@ -129,8 +139,8 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
     return (
         <div className="flex h-full w-full">
             <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden" ref={containerRef}>
-                <div className="flex-1 flex flex-col md:flex-row gap-0 h-full relative">
-                    {/* Source Editor - Flex 1 takes remaining space */}
+                <div className={`flex-1 flex ${isStacked ? 'flex-col' : 'flex-row'} gap-0 h-full relative`}>
+                    {/* Source Editor */}
                     <div className={`flex-1 flex flex-col min-h-0 p-4 min-w-0`}>
                         <div className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider flex justify-between items-center h-6">
                             <span>REST Body Template</span>
@@ -165,17 +175,24 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                     {/* Resizable Preview Panel */}
                     {isPreviewOpen && (
                         <>
-                            {/* Resize Handle */}
-                            <div 
-                                className="w-1 bg-slate-200 hover:bg-teal-400 cursor-col-resize z-10 hover:w-1.5 -ml-0.5 transition-all flex items-center justify-center group flex-shrink-0"
-                                onMouseDown={startResizing}
-                            >
-                                <div className="h-8 w-1 bg-slate-400 rounded-full group-hover:bg-white/80 hidden group-hover:block" />
-                            </div>
+                            {/* Resize Handle - Only show when not stacked */}
+                            {!isStacked && (
+                                <div 
+                                    className="w-1 bg-slate-200 hover:bg-teal-400 cursor-col-resize z-10 hover:w-1.5 -ml-0.5 transition-all flex items-center justify-center group flex-shrink-0"
+                                    onMouseDown={startResizing}
+                                >
+                                    <div className="h-8 w-1 bg-slate-400 rounded-full group-hover:bg-white/80 hidden group-hover:block" />
+                                </div>
+                            )}
 
                             <div 
                                 className="flex flex-col min-h-0 bg-slate-50/50 p-4 overflow-hidden flex-shrink-0"
-                                style={{ width: previewWidth }}
+                                style={{ 
+                                    width: isStacked ? '100%' : previewWidth,
+                                    height: isStacked ? '50%' : '100%',
+                                    borderTop: isStacked ? '1px solid #e2e8f0' : 'none',
+                                    borderLeft: isStacked ? 'none' : undefined
+                                }}
                             >
                                 <div className="flex justify-between items-center mb-2 h-6">
                                     <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Interpolated Output</div>

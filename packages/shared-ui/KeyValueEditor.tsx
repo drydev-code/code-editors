@@ -5,17 +5,19 @@ import { RestParam } from '../../lib/types';
 interface KeyValueEditorProps {
   items: RestParam[];
   onChange: (items: RestParam[]) => void;
-  title: string;
+  title?: string;
   readOnlyKeys?: boolean; // For Path Params where keys come from URL
   hideAddButton?: boolean;
+  hideTitle?: boolean;
 }
 
 export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({ 
-  items, 
+  items = [], 
   onChange, 
   title, 
   readOnlyKeys = false,
-  hideAddButton = false
+  hideAddButton = false,
+  hideTitle = false
 }) => {
   const handleAdd = () => {
     onChange([
@@ -42,11 +44,13 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-white rounded-lg">
-      <div className="flex justify-between items-center mb-2 px-1">
-        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">{title}</h3>
-      </div>
+      {title && !hideTitle && (
+        <div className="flex justify-between items-center mb-2 px-1">
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">{title}</h3>
+        </div>
+      )}
       
-      <div className="flex-1 overflow-y-auto space-y-1 pr-2 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
         {items.map((item) => (
           <div key={item.id} className="flex flex-col gap-1 group mb-1">
             <div className="flex items-center gap-2">
@@ -105,7 +109,7 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
 
         {items.length === 0 && (
           <div className="text-center py-6 text-slate-400 text-xs italic border border-dashed border-slate-200 rounded bg-slate-50/50">
-            No {title.toLowerCase()} needed
+            No {title ? title.toLowerCase() : 'items'} needed
           </div>
         )}
 

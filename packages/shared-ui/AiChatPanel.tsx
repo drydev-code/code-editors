@@ -43,7 +43,7 @@ const parseMessage = (text: string): MessagePart[] => {
   return parts;
 };
 
-export const AiChatPanel: React.FC<AiChatPanelProps> = ({ messages, onSendMessage, onApplyCode, isLoading }) => {
+export const AiChatPanel: React.FC<AiChatPanelProps> = ({ messages = [], onSendMessage, onApplyCode, isLoading }) => {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -159,7 +159,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ messages, onSendMessag
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask AI..."
             disabled={isLoading}
-            className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-4 pr-12 py-3 text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500/20 text-slate-800 placeholder-slate-400 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+            className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-4 pr-12 py-3 text-sm focus:outline-none focus:border-teal-500 focus:border-opacity-50 focus:ring-1 focus:ring-teal-500/20 text-slate-800 placeholder-slate-400 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
           />
           <button
             type="submit"

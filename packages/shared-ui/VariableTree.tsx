@@ -115,7 +115,7 @@ const TreeNode: React.FC<{ node: VariableNode; editorType?: EditorType; onInsert
   );
 };
 
-export const VariableTree: React.FC<Props> = ({ data, editorType, onInsert }) => {
+export const VariableTree: React.FC<Props> = ({ data = {}, editorType, onInsert }) => {
   const tree = buildTree(data);
 
   return (
